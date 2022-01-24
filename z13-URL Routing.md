@@ -5,8 +5,6 @@ URL routing solves these problems by introducing middleware (actually two middle
 
 ![alt text](./zImages/13-4.png "Title")
 
-## Adding the Routing Middleware and Defining an Endpoint
-
 In ASP.NET Core 3, routing is consisted of two processes: Endpoint Selection and Endpoint Invoke
 
 ![alt text](./zImages/13-5.png "Title")

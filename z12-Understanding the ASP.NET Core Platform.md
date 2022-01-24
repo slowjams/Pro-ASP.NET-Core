@@ -690,7 +690,7 @@ public static class MapExtensions {
       // create branch
       var branchBuilder = app.New();
       configuration(branchBuilder);
-       var branch = branchBuilder.Build();
+      var branch = branchBuilder.Build();
    }
 
    var options = new MapOptions {
