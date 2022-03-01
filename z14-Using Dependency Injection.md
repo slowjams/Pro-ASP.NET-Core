@@ -338,7 +338,7 @@ internal abstract class ServiceProviderEngine : IServiceProviderEngine, IService
                                                      // so root scope is created by ServiceProviderEngine you can say
       RuntimeResolver = new CallSiteRuntimeResolver();
       CallSiteFactory = new CallSiteFactory(serviceDescriptors);
-      CallSiteFactory.Add(typeof(IServiceProvider), new ServiceProviderCallSite());   // this is why we can inject IServiceProvider into our services
+      CallSiteFactory.Add(typeof(IServiceProvider), new ServiceProviderCallSite());   // <-----------------this is why we can inject IServiceProvider into our services
 
       // I think this is related to the ServiceProviderServiceExtensions.CreateScope method
       CallSiteFactory.Add(typeof(IServiceScopeFactory), new ServiceScopeFactoryCallSite());  
@@ -919,6 +919,149 @@ services.AddTransient<INotificationService>(sp =>
          sp.GetRequiredService<AccountingNotifier>(),
          sp.GetRequiredService<OrderFulfillment>(),
       }));
+```
+
+## Some Interesting Things to Note
+
+**Fact One**: What if we inject into a Controller? (it is anti-pattern anyway, but what if we do it)
+```C#
+public class HomeController : Controller {
+
+   public HomeController(IServiceProvider sp) {  // sp is request scope, not root container's associated scope
+      // ...
+   }
+}
+```
+
+**Fact Two**: Root ServiceProvder is actully not the one get passed
+
+```C#
+class Program {
+   static void Main(string[] args) {
+      var services = new ServiceCollection();
+     
+      services.AddScoped(sp => {  // <---------------scopedDelegate
+         return new MyService();   
+         // breakpointerB
+      });
+
+      var container = services.BuildServiceProvider();
+
+      IServiceScope requestScope = container.CreateScope();
+
+      var myService1 = container.GetRequiredService<MyService>();
+
+      var myService2 = requestScope.ServiceProvider.GetRequiredService<MyService>();   // breakpointerA
+
+      var myService3 = requestScope.ServiceProvider.GetRequiredService<MyService>();   // scopedDelegate won't invoke, a "cache" one will be used
+   }
+}
+
+class MyService {
+   public MyService() { }
+}
+```
+If you put the breakpointerA and breakpointerB, you might expect that `container` and `sp` are the same object (by checking memory address of them using immediate window). But actually their addresses are different, if you see the new version of MSDI source code, you will see that it is `new ServiceProviderEngineScope(this, isRootScope: true)` get passed.
+
+Also note that breakpointerB only breaks twice, one for `container.GetRequiredService<MyService>()`, the other for `var myService2 = scope.ServiceProvider.GetRequiredService<MyService>()`, because we resolve them in different scope. However, `var myService3 = scope.ServiceProvider.GetRequiredService<MyService>()` won't hit the breakpointB for a third time, because MSDI uses `Func<ServiceProviderEngineScope, object?>>`, as long as the ServiceProviderEngineScope is the same, the subsequent request will get the "cache" one.
+
+**Fact Three**: what if you resolve a singleton service from request scope?
+
+```C#
+class Program {
+   static void Main(string[] args) {
+      var services = new ServiceCollection();
+     
+      services.AddSingleton(sp1 => {   // <-------------a  sp1 is root scope 
+         return new MyServiceOne();
+      });
+
+      services.AddSingleton(sp2 => {   // <-------------b  sp2 is still root scope, this is very dangerous if you think sp2 is requestScope because you resolve from request scope,
+         return new MyServiceTwo();    // if MyServiceTwo takes an argument that should be resolved from a request scope, you actually end up with resolving it from root scope
+                                       // so it is an error if you do `return new MyServiceTwo(sp.ServiceProvider.GetRequiredService<XXX>())`
+      });
+
+      services.AddScoped(sp3 => {      // <-------------c  sp3 is request scope
+         return new MyServiceThree();
+      });
+
+      var container = services.BuildServiceProvider();
+
+      IServiceScope requestScope = container.CreateScope();
+
+      var myService1 = container.GetRequiredService<MyServiceOne>();                 // a
+
+      var myService2 = requestScope.ServiceProvider.GetRequiredService<MyServiceTwo>();     // b
+
+      var myService3 = requestScope.ServiceProvider.GetRequiredService<MyServiceThree>();   // c
+   }
+}
+
+class MyServiceOne {
+   public MyServiceOne() { }
+}
+
+class MyServiceTwo {
+   public MyServiceTwo() { }
+}
+
+class MyServiceThree {
+   public MyServiceThree() { }
+}
+```
+`sp1` is the container's root scope (`ServiceProvider.Root`) for sure and `sp3` is request scope for sure, what about `sp2`? We resolve it from the request scope, so will `sp2` be the root scope too? **No, `sp2` is root scope too**. 
+
+## New Version of MSDI- To work in the future to understand everything (probably after reviewing CLR via C#'s last two chapters)
+
+Microsoft team rewrite the MSDI, so there are some minor differences compared to previous version
+
+```C#
+public sealed class ServiceProvider : IServiceProvider, IDisposable, IAsyncDisposable {
+   // ...
+   private readonly Func<Type, Func<ServiceProviderEngineScope, object?>> _createServiceAccessor;
+   internal ServiceProviderEngineScope Root { get; }
+
+   internal ServiceProvider(ICollection<ServiceDescriptor> serviceDescriptors, ServiceProviderOptions options) {
+      // note that Root needs to be set before calling GetEngine(), because the engine may need to access Root
+      Root = new ServiceProviderEngineScope(this, isRootScope: true);
+      // ...
+   }
+
+   public object? GetService(Type serviceType) => GetService(serviceType, Root);   // not GetService(serviceType, this);
+
+   internal IServiceScope CreateScope() {
+      return new ServiceProviderEngineScope(this, isRootScope: false);
+   }
+   // ...
+}
+
+internal sealed class ServiceProviderEngineScope : IServiceScope, IServiceProvider, IAsyncDisposable, IServiceScopeFactory {
+   internal IList<object> Disposables => _disposables ?? (IList<object>)Array.Empty<object>();
+   
+   private bool _disposed;
+   private List<object>? _disposables;
+
+   public ServiceProviderEngineScope(ServiceProvider provider, bool isRootScope) {
+      ResolvedServices = new Dictionary<ServiceCacheKey, object?>();
+      RootProvider = provider;
+      IsRootScope = isRootScope;
+   }
+
+   internal Dictionary<ServiceCacheKey, object?> ResolvedServices { get; }
+
+   public bool IsRootScope { get; }
+
+   internal ServiceProvider RootProvider { get; }
+
+   public object? GetService(Type serviceType) {
+      return RootProvider.GetService(serviceType, this);
+   }
+
+   public IServiceProvider ServiceProvider => this;
+
+   public IServiceScope CreateScope() => RootProvider.CreateScope();   // now you see why MSDI doesn't support nested scopes
+                                                                       // because a new scope is created from ServiceProvider(RootProvider)
+}
 ```
 
 

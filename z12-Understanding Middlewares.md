@@ -1,4 +1,4 @@
-Chapter 12-Understanding the ASP.NET Core Platform
+Chapter 12-Understanding Middlewares
 ==============================
 
 ## Understanding the ASP.NET Core Request Flow
@@ -113,7 +113,7 @@ app.UseEndpoints(endpoints => {
       await context.Response.WriteAsync("Hello World!");
    });
    endpoints.MapGet("/secret", SecretEndpoint.Endpoint);
-   ...
+   //...
 });
 
 // the middlewares registered after UseEndpoints will be ignored
@@ -337,11 +337,10 @@ public void Configure(IApplicationBuilder app, IWebHostEnvironment env) {
 
 ## Source Code
 
-#### IApplicationBuilder related
 ```C#
 //-----------------------------------------------------------------------------------------------------------------------------------------V
 public delegate Task RequestDelegate(HttpContext context);
-
+//----------------------------------V
 public interface IApplicationBuilder {   // namespace Microsoft.AspNetCore.Builder; Assembly Microsoft.AspNetCore.Http.Abstractions
    IServiceProvider ApplicationServices { get; set; }
    IFeatureCollection ServerFeatures { get; }
@@ -361,7 +360,11 @@ public class ApplicationBuilder : IApplicationBuilder {
       Properties = new Dictionary<string, object?>(StringComparer.Ordinal);
       ApplicationServices = serviceProvider;
    }
-   ... 
+   
+   private ApplicationBuilder(ApplicationBuilder builder) {
+      Properties = new CopyOnWriteDictionary<string, object?>(builder.Properties, StringComparer.Ordinal);
+   }
+
    public IFeatureCollection ServerFeatures {
       get {
          return GetProperty<IFeatureCollection>(ServerFeaturesKey)!;
@@ -396,7 +399,7 @@ public class ApplicationBuilder : IApplicationBuilder {
    
    public RequestDelegate Build() {   // produce a RequestDelegate that executes added middlewares
       RequestDelegate app = context => {
-         ...
+         // ...
          context.Response.StatusCode = StatusCodes.Status404NotFound;  // it is NOT sth like setting StatusCode as 404 by default, will explain in details
          return Task.CompletedTask;                                      
       };
@@ -407,7 +410,8 @@ public class ApplicationBuilder : IApplicationBuilder {
       return app;
    }
 }
-
+//----------------------------------Ʌ
+//-------------------------------V
 public static class UseExtensions {
 
    // this method is for better performance
@@ -427,6 +431,7 @@ public static class UseExtensions {
       });
    }
 }
+//-------------------------------Ʌ
 ```
 ```C#
 public static class RunExtensions {   // add a terminal middleware delegate to the application's request pipeline
@@ -465,7 +470,7 @@ public static class UseMiddlewareExtensions {
          var instance = ActivatorUtilities.CreateInstance(app.ApplicationServices, middleware, ctorArgs);
          //...
          return context => {
-            //...
+            //... need to grasp Expression and understand this part
          }
       });
    }
@@ -574,6 +579,8 @@ public static class EndpointRoutingApplicationBuilderExtensions {
 
 As you can see in `ApplicationBuilder`:
 ```C#
+public delegate Task RequestDelegate(HttpContext context);
+
 public class ApplicationBuilder : IApplicationBuilder {
 
    private readonly List<Func<RequestDelegate, RequestDelegate>> _components = new();

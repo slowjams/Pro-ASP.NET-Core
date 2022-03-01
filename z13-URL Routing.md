@@ -1,7 +1,7 @@
 Chapter 13-URL Routing
 ==============================
 
-URL routing solves these problems by introducing middleware (actually two middlewares) that takes care of matching request URLs so that components, called endpoints, can focus on responses. The mapping between endpoints and the URLs they require is expressed in a ***route***. The routing middleware processes the URL, inspects the set of routes and finds the endpoint to handle the request, a process known as ***routing***. An endpoint represents a handler (`RequestDelegate`) for a request, and it also provides a container for metadata , Many behaviors in the routing process can be controlled by the corresponding metadata:
+URL routing solves these problems by introducing middleware (actually two middlewares) that takes care of matching request URLs so that components, called endpoints, can focus on responses. The mapping between endpoints and the URLs they require is expressed in a ***route***. The routing middleware processes the URL, inspects the set of routes and finds the endpoint to handle the request, a process known as ***routing***. An endpoint represents a handler (`RequestDelegate`) for a request, and it also provides a container for metadata, Many behaviors in the routing process can be controlled by the corresponding metadata:
 
 ![alt text](./zImages/13-4.png "Title")
 
@@ -133,7 +133,7 @@ public static class EndpointRoutingApplicationBuilderExtensions      // namespac
           }
        }
 
-       return builder.UseMiddleware<EndpointMiddleware>();
+       return builder.UseMiddleware<EndpointMiddleware>();  // <-------------------------b8
    }
 
    private static void VerifyRoutingServicesAreRegistered(IApplicationBuilder app) {  // <---------a1
