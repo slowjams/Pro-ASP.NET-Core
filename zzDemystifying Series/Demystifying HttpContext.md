@@ -1,8 +1,8 @@
-Demystify ASP.NET Core
+Demystifying HttpContext
 ==============================
 
 ```C#
-//-------------------------------VV
+//-------------------------------V
 public abstract class HttpContext {   // namespace Microsoft.AspNetCore.Http
    ...
    public abstract HttpRequest Request { get; }
@@ -19,11 +19,12 @@ public abstract class HttpContext {   // namespace Microsoft.AspNetCore.Http
 
    public abstract IServiceProvider RequestServices { get; set; }   // gets or sets the IServiceProvider that can access to the request's service container.
 }
-//-------------------------------ɅɅ
-//------------------------------------V
-public sealed class DefaultHttpContext : HttpContext {
+//-------------------------------Ʌ
 
-   private const int DefaultFeatureCollectionSize = 10;   //based on number of common features
+//------------------------------------V
+public sealed class DefaultHttpContext : HttpContext  // in a nutshell, HttpContext stores everything like RouteValues in a FeatureCollection instance which is managed 
+{                                                     // FeatureReferences<FeatureInterfaces>, that's how you can access HttpContext.Features.              
+   private const int DefaultFeatureCollectionSize = 10;   //based on the number of most common features
    
    private static readonly Func<IFeatureCollection, IItemsFeature> _newItemsFeature = f => new ItemsFeature();
    private static readonly Func<DefaultHttpContext, IServiceProvidersFeature> _newServiceProvidersFeature 
@@ -53,9 +54,15 @@ public sealed class DefaultHttpContext : HttpContext {
       _response = new DefaultHttpResponse(this);  // <----------------------------------a4
    }
    
+   public IServiceScopeFactory ServiceScopeFactory { get; set; } = default!;
+
    // both of FeatureReferences and FeatureInterfaces are struct
    private FeatureReferences<FeatureInterfaces> _features;    // <-------a2.1--------->   
 
+   /*
+      The reason we store everything such as IHttpRequestFeature, IRouteValuesFeature etc into a IFeatureCollection instead of defining property directly like 
+      `RouteValueDictionary RouteValues { get; set; }` on HttpContext is probably we need extensibility
+   */
    public override IFeatureCollection Features => _features.Collection;   // <---------a3.0---------->
 
    public override HttpRequest Request => _request;
@@ -614,6 +621,11 @@ public DefaultHttpContext(IFeatureCollection features) {
 }
 ```
 that's why you can access `HttpContext` from `HttpRequest` and `Response`
+
+
+**The key take away is, asp.net core store everything in "Feature" (probably for extensibility) which is a `FeatureCollection` associated with `HttpContext`, and this `IFeatureCollection` is managed by a "cache" structure (`FeatureReferences<FeatureInterfaces>`) and this cache collection get passed to `HttpRequest` and `HttpResponse` (along with ``HttpContext` itself), so if you add/modify a feature in one party (e.g `HttpRequest`), and the change will be refelected to the rest of two parties (e.g `HttpContext` and `HttpResponse`) because of the cache**
+
+**The cache work like this: some common features like `IRequestCookiesFeature`, `IRouteValuesFeature` etc are defined in a struct, if the `FeatureCollection` is changed by any other party, the Collection's Revision number will change, so the party can compare the Revision number to know it should get the latest feature from `FeatureCollection`**
 ---------------------------------------------------------------------------------------------------------
 
 ## Demystify CookiePolicyMiddleware

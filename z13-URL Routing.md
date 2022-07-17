@@ -10,20 +10,20 @@ In ASP.NET Core 3, routing is consisted of two processes: Endpoint Selection and
 ![alt text](./zImages/13-5.png "Title")
 
 ```C#
-public class Startup {
-   public void ConfigureServices(IServiceCollection services) {
-   }
+public class Startup 
+{
+   public void ConfigureServices(IServiceCollection services) { }
+
    public void Configure(IApplicationBuilder app, IWebHostEnvironment env) {
       ...
       app.Map("/branch", app => { 
          app.Run(new QueryStringMiddleWare().Invoke);
       });
 
-      app.UseRouting();  // <---------------------------------A (select an endpint)
-      
-      // ... EndpointRoutingMiddleware will associate the endpoint with HttpContext, it will also set HttpContext's RouteValueDictionary values
+      app.UseRouting();  // <---------------------------------A (select an endpint) using EndpointRoutingMiddleware
+                         //EndpointRoutingMiddleware will associate the endpoint with HttpContext, it will also set HttpContext's RouteValueDictionary values
      
-      app.UseEndpoints(endpoints => {  // <------------------ B (register mapping and invoke endpoint)
+      app.UseEndpoints(endpoints => {  // <------------------ B (register mapping and invoke endpoint), using EndpointRoutingMiddleware
          
          endpoints.MapGet("routing", async context => {    // endpoints is IEndpointRouteBuilder
             await context.Response.WriteAsync("Request Was Routed");
@@ -38,11 +38,11 @@ public class Startup {
          endpoints.Map("{number:int}", async context => {
             await context.Response.WriteAsync("Routed to the int endpoint");
          })
-         .WithDisplayName("Int Endpoint")    // WithDisplayName is an extension method of IEndpointConventionBuilder
+         .WithDisplayName("Int Endpoint")                  // WithDisplayName is an extension method of IEndpointConventionBuilder
          .Add(b => ((RouteEndpointBuilder)b).Order = 1);   // Add is the native method of IEndpointConventionBuilder
 
-          endpoints.Map("{number:int}", async context => {
-            await context.Response.WriteAsync("Routed to the int endpoint");
+          endpoints.Map("{number:double}", async context => {
+            await context.Response.WriteAsync("Routed to the double endpoint");
          })
          .WithDisplayName("Double Endpoint")
          .Add(b => ((RouteEndpointBuilder)b).Order = 2);
@@ -89,6 +89,8 @@ The main purpose of b2 is to retrieve the `DefaultEndpointRouteBuilder` that is 
 
 ![alt text](./zImages/13-3.png "Title") 
 
+b3 is quite important, so I will explain it in a seperate section
+
 **b4**: create an instance of `RouteEndpointBuilder` which is a specific version of `EndpointBuilder`, this instance will be attached to DefaultEndpointRouteBuilder in b6
 
 **b5**: `DefaultEndpointRouteBuilder.DataSources` will store an instance of `ModelEndpointDataSource` (see s1)
@@ -99,14 +101,22 @@ Now the picture is like:
 
 `DefaultEndpointRouteBuilder.DataSources` -> `ModelEndpointDataSource`
 `ModelEndpointDataSource._endpointConventionBuilders` -> `DefaultEndpointConventionBuilder`
+
 ```C#
-//--------------------V
-public static class EndpointRoutingApplicationBuilderExtensions      // namespace Microsoft.AspNetCore.Builder;
+//-----------------V
+public static class EndpointRoutingApplicationBuilderExtensions     
 {  
    private const string EndpointRouteBuilder = "__EndpointRouteBuilder";
    private const string GlobalEndpointRouteBuilderKey = "__GlobalEndpointRouteBuilder";
-   ...
+   //...
+
+   /*
+   UseRouting's job is: 
+     1. Create a IEndpointRouteBuilder instance and stored in IApplicationBuilder.Properties
+     2. Use EndpointRoutingMiddleware middleware   
+   */
    public static IApplicationBuilder UseRouting(this IApplicationBuilder builder) {  // <----------------------A
+      // checks if service.AddRouting() is called
       VerifyRoutingServicesAreRegistered(builder);  // <---------a1
 
       IEndpointRouteBuilder endpointRouteBuilder;
@@ -116,7 +126,7 @@ public static class EndpointRoutingApplicationBuilderExtensions      // namespac
          builder.Properties[EndpointRouteBuilder] = endpointRouteBuilder;
       } else {
          endpointRouteBuilder = new DefaultEndpointRouteBuilder(builder);  // <---------a2
-         builder.Properties[EndpointRouteBuilder] = endpointRouteBuilder;
+         builder.Properties[EndpointRouteBuilder] = endpointRouteBuilder;  // <-----------------  IEndpointRouteBuilder is saved in ApplicationBuilder.Properties
       }
       return builder.UseMiddleware<EndpointRoutingMiddleware>(endpointRouteBuilder); // <---------a3
    }
@@ -124,7 +134,7 @@ public static class EndpointRoutingApplicationBuilderExtensions      // namespac
    public static IApplicationBuilder UseEndpoints(this IApplicationBuilder builder, Action<IEndpointRouteBuilder> configure) {  // B
        VerifyRoutingServicesAreRegistered(builder); // <---------b1
        VerifyEndpointRoutingMiddlewareIsRegistered(builder, out var endpointRouteBuilder);   // <---------b2
-       configure(endpointRouteBuilder);   // <---------b3
+       configure(endpointRouteBuilder);   // <-------------b3, this applies the changes you made with: e.g endpoints.MapGet("{first}/{second}/{third}", ...) 
 
        var routeOptions = builder.ApplicationServices.GetRequiredService<IOptions<RouteOptions>>();
        foreach (var dataSource in endpointRouteBuilder.DataSources) {   
@@ -178,17 +188,24 @@ internal sealed partial class EndpointRoutingMiddleware {   // <---------a3
       _endpointDataSource = new CompositeEndpointDataSource(endpointRouteBuilder.DataSources);                                                                                     
    }
 
-   public Task Invoke(HttpContext httpContext) {
+   public Task Invoke(HttpContext httpContext) 
+   {
       var endpoint = httpContext.GetEndpoint();  // there is already an endpoint, skip matching completely
       if (endpoint != null) {
-         // ...
          return _next(httpContext);
       }
+
       // ...
-      // matcher is DfaMatcher whose job is to associate an endpoint to a HttpContext first according to 
-      // then use a complex process to determine which endpoints to associate
-      var matcher = _matcherFactory.CreateMatcher(_endpointDataSource); 
-      matcher.MatchAsync(httpContext);    // <-------------------------------------a4
+      
+      // matcher is DfaMatcher whose job is to associate an endpoint to a HttpContext (by analysing httpContext.Request.Path.Value) 
+      // using a complex process to determine which endpoints to associate
+      var matcher = _matcherFactory.CreateMatcher(_endpointDataSource);   // <---------------------- we pass IEndpointRouteBuilder.DataSources that contains RouteEndpointBuilder 
+                                                                          // which contains RequestDelegate and RoutePattern, so DfaMatcher can match it withHttpContext's URL
+
+     
+      // call httpContext.SetEndpoint(candidate.Endpoint) when find a candicate
+      await matcher.MatchAsync(httpContext);    // <-------------------------------------a4
+     
       // ... tweak the code, inline sepearate private method
       var endpoint = httpContext.GetEndpoint();
       if (endpoint == null) {   //  DfaMatcher didn't find any matching
@@ -197,18 +214,48 @@ internal sealed partial class EndpointRoutingMiddleware {   // <---------a3
          // ...
          Log.MatchSuccess(_logger, endpoint);
       }
+
       return _next(httpContext);       
    }
 }
 //--------------------Ʌ
+
+//--------------V
+public interface IEndpointFeature
+{
+   Endpoint? Endpoint { get; set; }
+}
+
+public static class EndpointHttpContextExtensions
+{
+   public static Endpoint GetEndpoint(this HttpContext context)
+   {
+      return context.Features.Get<IEndpointFeature>().Endpoint;
+   }
+
+   public static void SetEndpoint(this HttpContext context, Endpoint endpoint)  // DFA matcher will add the matched endpoint to HttpContext's Feature property
+   {
+      var feature = context.Features.Get<IEndpointFeature>();
+       // ...  null check, if null do `feature = new EndpointFeature()`
+      feature.Endpoint = endpoint;
+   }
+}
+//--------------Ʌ
+
 //--------------------V
-internal sealed class DfaMatcher : Matcher 
+internal abstract class Matcher
+{
+   // find and set an Endpoint to HttpContext using the extension method of HttpContext.SetEndpoint()
+   public abstract Task MatchAsync(HttpContext httpContext);
+}
+
+internal sealed class DfaMatcher : Matcher   
 {
    // ...
-   // private readonly DfaState[] _states; 
    private readonly EndpointSelector _selector;
 
-   public sealed override Task MatchAsync(HttpContext httpContext) {  // <---------a4
+   public sealed override Task MatchAsync(HttpContext httpContext)  // <------------------a4
+   {  
       var path = httpContext.Request.Path.Value!;
       
       // First tokenize the path into series of segments.
@@ -216,7 +263,6 @@ internal sealed class DfaMatcher : Matcher
       var count = FastPathTokenizer.Tokenize(path, buffer);
       var segments = buffer.Slice(0, count);
       
-      // FindCandidateSet will return a candidate set. This does some preliminary matching of the URL (mostly the literal segments).
       var (candidates, policies) = FindCandidateSet(httpContext, path, segments);
       var candidateCount = candidates.Length;
       if (candidateCount == 0) {
@@ -228,149 +274,27 @@ internal sealed class DfaMatcher : Matcher
       if (candidateCount == 1 && policyCount == 0 && _isDefaultEndpointSelector) {
          // Just strict path matching (no route values)
          if (candidate.Flags == Candidate.CandidateFlags.None) {
-            httpContext.SetEndpoint(candidate.Endpoint);  // <------- simple case when there is only one candicate
+            httpContext.SetEndpoint(candidate.Endpoint);  // <--------------------------- 
             return Task.CompletedTask;
          }
       }
-      // at this point we have a candidate set, defined as a list of endpoints in priority order.
-      // We don't yet know that any candidate can be considered a match, because we haven't processed things like route constraints and complex segments.
-      // Now we'll iterate each endpoint to capture route values, process constraints, and process complex segments.
 
-      // `candidates` has all of our internal state that we use to process the set of endpoints before we call the EndpointSelector
-
-      // `candidateSet` is the mutable state that we pass to the EndpointSelector.
-      var candidateState = new CandidateState[candidateCount];  // represent a possilbe matching list of endpoint   
-      
-      for (var i = 0; i < candidateCount; i++) {
-         // using ref here to avoid copying around big structs.
-         // candidate: readonly data about the endpoint and how to match
-         // state: mutable storarge for our processing
-          ref readonly var candidate = ref candidates[i];
-          ref var state = ref candidateState[i];
-          state = new CandidateState(candidate.Endpoint, candidate.Score);
-
-          var flags = candidate.Flags;
-
-          // first process all of the parameters and defaults
-          if ((flags & Candidate.CandidateFlags.HasSlots) != 0) {
-             // Slots array has the default values of the route values in it
-             // we want to create a new array for the route values based on Slots as a prototype
-             var prototype = candidate.Slots;
-             var slots = new KeyValuePair<string, object?>[prototype.Length];   // slots is for RouteValueDictionary
-
-             if ((flags & Candidate.CandidateFlags.HasDefaults) != 0) {
-                Array.Copy(prototype, 0, slots, 0, prototype.Length);
-             }
-
-             if ((flags & Candidate.CandidateFlags.HasCaptures) != 0) {
-                ProcessCaptures(slots, candidate.Captures, path, segments);
-             }
-
-             if ((flags & Candidate.CandidateFlags.HasCatchAll) != 0) {
-                ProcessCatchAll(slots, candidate.CatchAll, path, segments);
-             }
-
-             state.Values = RouteValueDictionary.FromArray(slots);
-          }
-
-          // now that we have the route values, we need to process complex segment
-          var isMatch = true;
-          if ((flags & Candidate.CandidateFlags.HasComplexSegments) != 0) 
-          {
-             state.Values ??= new RouteValueDictionary();
-             if (!ProcessComplexSegments(candidate.Endpoint, candidate.ComplexSegments, path, segments, state.Values))
-             {
-                CandidateSet.SetValidity(ref state, false);
-                isMatch = false;
-             }
-          }
-
-          if ((flags & Candidate.CandidateFlags.HasConstraints) != 0) 
-          {
-             state.Values ??= new RouteValueDictionary();
-             if (!ProcessConstraints(candidate.Endpoint, candidate.Constraints, httpContext, state.Values))
-             {
-                CandidateSet.SetValidity(ref state, false);
-                isMatch = false;
-             }
-          }
-      }
+      // ... complicated matching process
 
       if (policyCount == 0 && _isDefaultEndpointSelector) 
       {
-         DefaultEndpointSelector.Select(httpContext, candidateState);
+         DefaultEndpointSelector.Select(httpContext, candidateState);   // <--------------------- eventually call httpContext.SetEndpoint()
          return Task.CompletedTask;
       }
       else if (policyCount == 0)
       {
-         return _selector.SelectAsync(httpContext, new CandidateSet(candidateState));
+         // ...
       }
 
-      return SelectEndpointWithPoliciesAsync(httpContext, policies, new CandidateSet(candidateState));
+      // ...
    }
 
-   internal (Candidate[] candidates, IEndpointSelectorPolicy[] policies) FindCandidateSet(HttpContext httpContext, string path, ReadOnlySpan<PathSegment> segments)
-   {
-      // var states = _states; ignore this
-
-      // Process each path segment
-      var destination = 0;
-      for (var i = 0; i < segments.Length; i++) 
-      {
-         // DfaState's PathTransitions is a LinearSearchJumpTable that does string comparasion faster
-         destination = states[destination].PathTransitions.GetDestination(path, segments[i]);
-      }
-
-      // Process an arbitrary number of policy-based decisions
-      var policyTransitions = states[destination].PolicyTransitions;
-      while (policyTransitions != null)
-      {
-         destination = policyTransitions.GetDestination(httpContext);
-         policyTransitions = states[destination].PolicyTransitions;
-      }
-
-      return (states[destination].Candidates, states[destination].Policies);
-   }
-
-   private static void ProcessCaptures(KeyValuePair<string, object?>[] slots, (string parameterName, int segmentIndex, int slotIndex)[] captures, 
-                                       string path, ReadOnlySpan<PathSegment> segments)
-   {
-      for (var i = 0; i < captures.Length; i++) 
-      {
-         (var parameterName, var segmentIndex, var slotIndex) = captures[i];
-
-         if ((uint)segmentIndex < (uint)segments.Length)
-         {
-            var segment = segments[segmentIndex];
-            if (parameterName != null && segment.Length > 0)
-            {
-               slots[slotIndex] = new KeyValuePair<string, object?>(parameterName, path.Substring(segment.Start, segment.Length));
-            }
-         }
-      }
-   }
-   
-   private async Task SelectEndpointWithPoliciesAsync(HttpContext httpContext, IEndpointSelectorPolicy[] policies, CandidateSet candidateSet)
-   {
-      for (var i = 0; i < policies.Length; i++)
-      {
-         var policy = policies[i];
-         await policy.ApplyAsync(httpContext, candidateSet);
-         if (httpContext.GetEndpoint() != null) 
-         {
-            // this is a short circuit, the selector chose an endpoint
-            return;
-         }
-      }
-
-      await _selector.SelectAsync(httpContext, candidateSet);
-   }
-
-   private static void ProcessCatchAll(KeyValuePair<string, object?>[] slots, ... ReadOnlySpan<PathSegment> segments);
-
-   private bool ProcessComplexSegments(Endpoint endpoint, (RoutePatternPathSegment pathSegment, int segmentIndex)[] complexSegments,..., RouteValueDictionary values);
-
-   private bool ProcessConstraints(Endpoint endpoint, KeyValuePair<string, IRouteConstraint>[] constraints, HttpContext httpContext, RouteValueDictionary values);
+   // ...
 }
 //--------------------Ʌ
 //--------------------V
@@ -385,7 +309,7 @@ public static class EndpointHttpContextExtensions {
       return context.Features.Get<IEndpointFeature>()?.Endpoint;
    }
 
-   public static void SetEndpoint(this HttpContext context, Endpoint? endpoint) {
+   public static void SetEndpoint(this HttpContext context, Endpoint endpoint) {   // <------------------------
 
       var feature = context.Features.Get<IEndpointFeature>();
 
@@ -532,9 +456,10 @@ internal readonly struct Candidate {
    }
 }
 //--------------------Ʌ
-//-------------------------------------V
-public abstract class EndpointDataSource {  // provides a collection of Endpoint instances.
-   // public abstract IChangeToken GetChangeToken();
+
+//--------------------------------------V
+public abstract class EndpointDataSource {    // provides a collection of Endpoint instances.
+   public abstract IChangeToken GetChangeToken();
    public abstract IReadOnlyList<Endpoint> Endpoints { get; }
 }
 
@@ -609,8 +534,9 @@ public sealed class RouteEndpoint : Endpoint {  // namespace Microsoft.AspNetCor
    public RoutePattern RoutePattern { get; }
 }
 //-------------------Ʌ
-//-------------------V
-public interface IEndpointRouteBuilder {  // namespace Microsoft.AspNetCore.Routing;
+
+//------------------------------------V
+public interface IEndpointRouteBuilder {    // this has no Build() method
    IApplicationBuilder CreateApplicationBuilder();
    IServiceProvider ServiceProvider { get; }
    ICollection<EndpointDataSource> DataSources { get; }  // this property stores a collection of ModelEndpointDataSource  <----------s1
@@ -623,8 +549,13 @@ internal class DefaultEndpointRouteBuilder : IEndpointRouteBuilder {
    }
 
    public IApplicationBuilder ApplicationBuilder { get; }
-   public IApplicationBuilder CreateApplicationBuilder() => ApplicationBuilder.New();
+
+   public IApplicationBuilder CreateApplicationBuilder() 
+   {
+      ApplicationBuilder.New();
+   }
    public ICollection<EndpointDataSource> DataSources { get; }   
+
    public IServiceProvider ServiceProvider => ApplicationBuilder.ApplicationServices;
 }
 //-------------------Ʌ
@@ -733,12 +664,31 @@ public sealed class RouteEndpointBuilder : EndpointBuilder {
    }
 }
 //--------------------------------------Ʌ
-//------------------------------------------------------V
-public interface IEndpointConventionBuilder {  //  builds conventions that will be used for customization of EndpointBuilder instances.
+
+//-------------------V
+public class Endpoint {
+    public Endpoint(RequestDelegate? requestDelegate, EndpointMetadataCollection? metadata, string? displayName) {
+       // ...
+    }
+    public string? DisplayName { get; }
+    public EndpointMetadataCollection Metadata { get; }
+    public RequestDelegate? RequestDelegate { get; }
+    public override string? ToString() => DisplayName ?? base.ToString();
+}
+
+public sealed class RouteEndpoint : Endpoint {
+   // ... same as Endpoint except two things below
+   public int Order { get; }
+   public RoutePattern RoutePattern { get; }
+}
+//-------------------Ʌ
+
+//-----------------------------------------V
+public interface IEndpointConventionBuilder 
+{ 
    void Add(Action<EndpointBuilder> convention);
 }
 
-// to me, a ConventionBuilder is like a wrapper on builder, it contains a collection of delegate that can be invoked on the builders
 internal class DefaultEndpointConventionBuilder : IEndpointConventionBuilder {   
    
    internal EndpointBuilder EndpointBuilder { get; }
@@ -767,23 +717,7 @@ internal class DefaultEndpointConventionBuilder : IEndpointConventionBuilder {
       return EndpointBuilder.Build();
    }
 }
-//-------------------------------------------------------Ʌ
-public class Endpoint {
-    public Endpoint(RequestDelegate? requestDelegate, EndpointMetadataCollection? metadata, string? displayName) {
-       ...
-    }
-    public string? DisplayName { get; }
-    public EndpointMetadataCollection Metadata { get; }
-    public RequestDelegate? RequestDelegate { get; }
-    public override string? ToString() => DisplayName ?? base.ToString();
-}
-
-public sealed class RouteEndpoint : Endpoint {
-   // ... same as Endpoint except two things below
-   public int Order { get; }
-   public RoutePattern RoutePattern { get; }
-}
-//--------------------------------------Ʌ
+//-----------------------------------------Ʌ
 
 // metadata used during link generation to find the associated endpoint using route name
 public sealed class RouteNameMetadata : IRouteNameMetadata {
@@ -806,9 +740,7 @@ public static class RoutingEndpointConventionBuilderExtensions {
 
 
 //-------------------V
-public interface IParameterPolicy {
-
-}
+public interface IParameterPolicy { }  // a marker interface for types that are associated with route parameters
 
 public interface IRouteConstraint : IParameterPolicy {
    bool Match(HttpContext httpContext, IRouter route, string routeKey, RouteValueDictionary values, RouteDirection routeDirection);
@@ -816,7 +748,8 @@ public interface IRouteConstraint : IParameterPolicy {
 //-------------------Ʌ
 ```
 ```C#
-internal sealed partial class EndpointMiddleware 
+//---------------------------V
+internal sealed partial class EndpointMiddleware   // this middleware is quite simple, just executes the chosen endpoint
 {
    internal const string AuthorizationMiddlewareInvokedKey = "__AuthorizationMiddlewareWithEndpointInvoked";
    internal const string CorsMiddlewareInvokedKey = "__CorsMiddlewareWithEndpointInvoked";
@@ -864,19 +797,149 @@ internal sealed partial class EndpointMiddleware
          return Task.CompletedTask;  // <------------
       }                                           //| <----------- now you see why if there is a matched endpoint, then 'outer' middleware will be ignored,
                                                   //|              there is what the 'end' in 'endpoint' is all ablout
-      return _next(httpContext);     // <------------
+      return _next(httpContext);     // <------------    
+   }
+}
+//---------------------------Ʌ
+```
 
-      static async Task AwaitRequestTask(Endpoint endpoint, Task requestTask, ILogger logger) {
-         try {
-                await requestTask;
-         }
-         finally {
-            Log.ExecutedEndpoint(logger, endpoint);
-         }
-      }
+-------------------------------------------------------------------------------------------------------------------------------
+Let's put endpoint register in dissection:
+
+```C#
+public class Startup 
+{
+   public void ConfigureServices(IServiceCollection services) { }
+
+   public void Configure(IApplicationBuilder app, IWebHostEnvironment env) {
+      // ......
+      app.UseRouting();  
+
+      app.UseEndpoints(endpoints =>   // endpoints is IEndpointRouteBuilder
+      {  
+         endpoints.Map("{number:int}", async context => {     // <----------------------------------------- we will look at this one
+            await context.Response.WriteAsync("Routed to the int endpoint");
+         })
+         .WithDisplayName("Int Endpoint")                 
+         .Add(b => ((RouteEndpointBuilder)b).Order = 1); 
+
+         endpoints.Map("{number:double}", async context => {
+            await context.Response.WriteAsync("Routed to the double endpoint");
+         })
+         .WithDisplayName("Double Endpoint")                 
+         .Add(b => ((RouteEndpointBuilder)b).Order = 2);
+      });
    }
 }
 
+public static class EndpointRoutingApplicationBuilderExtensions 
+{
+   public static IApplicationBuilder UseEndpoints(this IApplicationBuilder builder, Action<IEndpointRouteBuilder> configure) 
+   {   
+      // step 1
+      VerifyEndpointRoutingMiddlewareIsRegistered(builder, out var endpointRouteBuilder);   // call !app.Properties.TryGetValue(EndpointRouteBuilder, out var obj) internally
+      
+      // step 2
+      configure(endpointRouteBuilder); 
+
+      // this part is complicated and related to discovery of endpoints or URL generation, don't worry about it
+      var routeOptions = builder.ApplicationServices.GetRequiredService<IOptions<RouteOptions>>();
+      foreach (var dataSource in endpointRouteBuilder.DataSources) {   
+         if (!routeOptions.Value.EndpointDataSources.Contains(dataSource)) {
+            routeOptions.Value.EndpointDataSources.Add(dataSource);   
+         }
+      }
+      //
+      
+      // step 3
+      return builder.UseMiddleware<EndpointMiddleware>();  
+   }
+}
+```
+
+1.  `UseEndpoints` extension method is called, `IEndpointRouteBuilder`(`DefaultEndpointRouteBuilder`) instance is retrieved from `ApplicationBuilder.Properties`
+
+```C#
+public interface IApplicationBuilder {   
+   IServiceProvider ApplicationServices { get; set; }
+   IFeatureCollection ServerFeatures { get; }
+   IDictionary<string, object?> Properties { get; }  // <-----------------------------------------
+   IApplicationBuilder Use(Func<RequestDelegate, RequestDelegate> middleware);
+   IApplicationBuilder New();
+   RequestDelegate Build();
+}
+```
+
+2. `endpoints.Map("{number:int}", ...)` is invoke where `endpoints` is `DefaultEndpointRouteBuilder`, so `Map()` extension method is called on it:
+   **2.1a**: `RoutePatternParser` (via `RoutePatternFactory`) first parses the "{number:int}" string into a `RoutePattern` which contains some `IReadOnlyDictionary` of
+          defaults, requiredValues, parameters, for example, you can do
+   ```C#
+   RoutePattern pattern = RoutePatternFactory.Parse("{controller=Home}/{action=Index}/{id?}");
+
+   public sealed class RoutePattern
+   {
+      /*
+      key: controller, value: Home
+      key: action, value: Index
+      */
+      IReadOnlyDictionary<string, object?> defaults;
+
+      // 3 RoutePatternParameterPart instances
+      IReadOnlyList<RoutePatternParameterPart> parameters;
+      // ...
+   }
+   ```
+   
+```C#
+public static class EndpointRouteBuilderExtensions
+{
+   public static IEndpointConventionBuilder MapGet(this IEndpointRouteBuilder endpoints, string pattern, RequestDelegate requestDelegate)
+   {
+      return MapMethods(endpoints, pattern, GetVerb, requestDelegate);
+   }
+
+   public static IEndpointConventionBuilder MapMethods(this IEndpointRouteBuilder endpoints, string pattern, IEnumerable<string> httpMethods, RequestDelegate handler)
+   {
+      // step 2.1a                                   // RoutePatternFactory creates RoutePattern (via RoutePatternParser whose job is to analyse "{number:int}" string )
+      IEndpointConventionBuilder builder = endpoints.Map(RoutePatternFactory.Parse(pattern), requestDelegate);  
+
+      builder.WithDisplayName($"{pattern} HTTP: {string.Join(", ", httpMethods)}"); 
+      
+      builder.WithMetadata(new HttpMethodMetadata(httpMethods));
+      
+      return builder;
+   }
+
+   // step 2.1b
+   public static IEndpointConventionBuilder Map(this IEndpointRouteBuilder endpoints, RoutePattern pattern, RequestDelegate requestDelegate) 
+   {  
+      const int defaultOrder = 0;
+
+      var builder = new RouteEndpointBuilder(requestDelegate, pattern, defaultOrder) {   // associate the user defined delegate to RouteEndpointBuilder, when Build() method called
+         DisplayName = pattern.RawText                                                   // it returns the Endpoint that has the delegate. Now you see how your RequestDelegate
+      }                                                                                  // is attached to the Endpoint
+
+      var attributes = requestDelegate.Method.GetCustomAttributes();
+
+      foreach (var attribute in attributes) {
+         builder.Metadata.Add(attribute);
+      }
+
+      var dataSource = endpoints.DataSources.OfType<ModelEndpointDataSource>().FirstOrDefault();
+      if (dataSource == null) {
+         dataSource = new ModelEndpointDataSource();
+         endpoints.DataSources.Add(dataSource);  
+      }
+
+      return dataSource.AddEndpointBuilder(builder); 
+   }
+}
+```
+
+3. `EndpointMiddleware` will execute the Endpointer that matched and set by `EndpointRoutingMiddleware`. 
+----------------------------------------------------------------------------------------------------------------
+
+```C#
 public class RouteOptions   // represent the configurable options on a route.
 {
    private IDictionary<string, Type> _constraintTypeMap = GetDefaultConstraintMap();
@@ -982,7 +1045,56 @@ public sealed class RoutePattern {
       // ...
    }
 
+   // Route Template: "{controller=Home}/{action=Index}/{id?}"
+   // Route Values: { controller = "Store", action = "Index" }
+   public IReadOnlyDictionary<string, object?> RequiredValues { get; }
+
+   public IReadOnlyDictionary<string, object?> Defaults { get; }
    // ...
+}
+```
+
+After reading source code, let's answer one important question, when does the `HttpRequest.RouteValues` get populated with Key/Value pairs? 
+
+```C#
+public class Startup 
+{
+   public void ConfigureServices(IServiceCollection services) { }
+
+   public void Configure(IApplicationBuilder app, IWebHostEnvironment env) 
+   {
+      app.UseMiddleware<TestMiddleware>();   // `HttpRequest.RouteValues` doesn't have Key/Value pairs
+
+      app.UseRouting();  
+
+      app.UseMiddleware<TestMiddleware>();   // `HttpRequest.RouteValues` have Key/Value pairs, first, second, third as Key
+
+      endpoints.MapGet("{first}/{second}/{third}", async context =>
+      {
+         await context.Response.WriteAsync("Request Was Routed\n");
+
+         foreach (var kvp in context.Request.RouteValues)
+         {
+            await context.Response.WriteAsync($"{kvp.Key}: {kvp.Value}\n");
+         }
+      });
+   }
+}
+```
+
+So we know `HttpRequest.RouteValues` must be populated with Key/Value pairs in `UseRouting()`. I think it happens in `EndpointRoutingMiddleware`
+
+```C#
+internal sealed partial class EndpointRoutingMiddleware 
+{   
+   // ...
+   public Task Invoke(HttpContext httpContext) 
+   {
+      // ...
+      var matcher = _matcherFactory.CreateMatcher(_endpointDataSource);   
+      await matcher.MatchAsync(httpContext);   // <--------------------------------- must be here
+      // ...   
+   }
 }
 ```
 
@@ -1202,6 +1314,7 @@ public class Startup {
 ```
 
 ## Using Constraints and Creating Custom Constraints
+
 ```C#
 public class CountryRouteConstraint : IRouteConstraint {
    private static string[] countries = { "uk", "france", "monaco" };
@@ -1293,7 +1406,426 @@ public class Startup {
    }
 }
 ```
+----------------------------------------------------------------------------------------------
 
+## A Simple Custom Routing System
+
+```C#
+public class Program
+{
+    public static void Main()
+    {
+        Host.CreateDefaultBuilder()
+            .ConfigureWebHostDefaults(builder => builder
+            .ConfigureServices(services => services
+                    .AddRouting()
+                    .AddMvcControllers())
+            .Configure(app => app
+            .UseDeveloperExceptionPage()
+                .UseRouting()
+                .UseEndpoints(endpoints => endpoints.MapMvcControllerRoute("default","{controller}/{action}"))))
+            .Build()
+            .Run();
+    }
+}
+```
+
+```C#
+public static class ServiceCollectionExtensions
+{
+   public static IServiceCollection AddMvcControllers(this IServiceCollection services)
+   {
+      services.AddSingleton<IActionDescriptorCollectionProvider, DefaultActionDescriptorCollectionProvider>();
+      services.AddSingleton<IActionInvokerFactory, ActionInvokerFactory>();
+      services.AddSingleton<IActionDescriptorProvider, ControllerActionDescriptorProvider>();
+      services.AddSingleton<ControllerActionEndpointDataSource, ControllerActionEndpointDataSource>();
+
+      return services;
+   }
+}
+```
+
+```C#
+public static class EndpointRouteBuilderExtensions
+{
+   public static ControllerActionEndpointConventionBuilder MapMvcControllers(this IEndpointRouteBuilder endpointBuilder)
+   {
+      var endpointDatasource = endpointBuilder.ServiceProvider.GetRequiredService<ControllerActionEndpointDataSource>();
+      endpointBuilder.DataSources.Add(endpointDatasource);
+      return endpointDatasource.DefaultBuilder;
+   }
+
+   public static ControllerActionEndpointConventionBuilder MapMvcControllerRoute(this IEndpointRouteBuilder endpointBuilder, string name, string pattern,
+                                                                                 RouteValueDictionary defaults = null, RouteValueDictionary constraints = null,
+                                                                                 RouteValueDictionary dataTokens = null)
+   {
+      var endpointDatasource = endpointBuilder.ServiceProvider.GetRequiredService<ControllerActionEndpointDataSource>();
+      endpointBuilder.DataSources.Add(endpointDatasource);
+      return endpointDatasource.AddRoute(name, pattern, defaults, constraints, dataTokens);
+   }
+}
+```
+
+**Part A**-`ActionDescriptor`
+
+```C#
+//---------------------------V
+public class ActionDescriptor
+{
+   public AttributeRouteInfo AttributeRouteInfo { get; set; }
+   public IDictionary<string, string> RouteValues { get; set; }
+}
+
+public class AttributeRouteInfo
+{
+   public int Order { get; set; }
+   public string Template { get; set; }
+}
+
+public class ControllerActionDescriptor : ActionDescriptor
+{
+   public Type ControllerType { get; set; }
+   public MethodInfo Method { get; set; }
+}
+
+public interface IActionDescriptorProvider
+{
+   IEnumerable<ActionDescriptor> ActionDescriptors { get; }
+}
+//---------------------------Ʌ
+
+//-------------------------------------V
+public interface IRouteTemplateProvider
+{
+   string Name { get; }
+   string Template { get; }
+   int? Order { get; }
+}
+
+public class HttpGetAttribute : HttpMethodAttribute
+{
+   private static readonly IEnumerable<string> _supportedMethods = new[] { "GET" };
+   public HttpGetAttribute() : base (_supportedMethods) { }
+   public HttpGetAttribute(string template) : base(_supportedMethods, template) { }
+}
+
+public abstract class HttpMethodAttribute : Attribute, IRouteTemplateProvider
+{
+   private readonly List<string> _httpMethods;
+   private int _order;
+
+   public HttpMethodAttribute(IEnumerable<string> httpMethods, string template)
+   {
+      _httpMethods = httpMethods.ToList();
+       Template = template;
+   }
+   
+   public IEnumerable<string> HttpMethods => _httpMethods;
+
+   //
+   public int Order
+   {
+      get { return _order ?? 0; }
+      set { _order = value; }
+   }
+
+   public string Name { get; set; }
+
+   int IRouteTemplateProvider.Order => _order;
+   //
+}
+//-------------------------------------Ʌ
+
+//---------------------------------------------V
+public class ControllerActionDescriptorProvider : IActionDescriptorProvider
+{
+   private readonly Lazy<IEnumerable<ActionDescriptor>> _accessor;
+   public IEnumerable<ActionDescriptor> ActionDescriptors => _accessor.Value;
+   public ControllerActionDescriptorProvider(IHostEnvironment environment)
+   {
+      _accessor = new Lazy<IEnumerable<ActionDescriptor>>(() => GetActionDescriptors(environment.ApplicationName));
+   }
+
+   private IEnumerable<ActionDescriptor> GetActionDescriptors(string applicationName)
+   {
+      var assemblyName = new AssemblyName(applicationName);
+
+      var assembly = Assembly.Load(assemblyName);
+
+      foreach (var type in assembly.GetExportedTypes())
+      {
+         if (type.Name.EndsWith("Controller"))
+         {
+            string controllerName = type.Name.Substring(0, type.Name.Length - "Controller".Length);
+            foreach (var method in type.GetMethods())
+            {
+               yield return CreateActionDescriptor(method, type, controllerName);
+            }
+         }
+      }
+   }
+
+   private ControllerActionDescriptor CreateActionDescriptor(MethodInfo method, Type controllerType, string controllerName)
+   {
+      var actionName = method.Name;
+
+      if (actionName.EndsWith("Async"))
+      {
+         actionName = actionName.Substring(0, actionName.Length - "Async".Length);
+      }
+
+      IRouteTemplateProvider templateProvider = method.GetCustomAttributes().OfType<IRouteTemplateProvider>().FirstOrDefault();
+
+      if (templateProvider != null)
+      {
+         AttributeRouteInfo routeInfo = new AttributeRouteInfo
+         {
+            Order = templateProvider.Order ?? 0,
+            Template = templateProvider.Template
+         };
+
+         return new ControllerActionDescriptor
+         {
+            AttributeRouteInfo = routeInfo,
+            ControllerType = controllerType,
+            Method = method
+         };
+      }
+
+      return new ControllerActionDescriptor
+      {
+         ControllerType = controllerType,
+         Method = method,
+         RouteValues = new Dictionary<string, string>
+         {
+            ["controller"] = controllerName,
+            ["action"] = actionName
+         }
+      };
+   }
+}
+
+public interface IActionDescriptorCollectionProvider
+{
+   IReadOnlyList<ActionDescriptor> ActionDescriptors { get; }
+}
+
+public class DefaultActionDescriptorCollectionProvider : IActionDescriptorCollectionProvider   // ControllerActionDescriptorProvider is for convention routing, this 
+{                                                                                              // CollectionProvider is both for convention and attribute routing
+   private readonly Lazy<IReadOnlyList<ActionDescriptor>> _accessor;
+   public IReadOnlyList<ActionDescriptor> ActionDescriptors => _accessor.Value;
+
+   public DefaultActionDescriptorCollectionProvider(IEnumerable<IActionDescriptorProvider> providers)
+   {
+      _accessor = new Lazy<IReadOnlyList<ActionDescriptor>>(() => providers.SelectMany(it => it.ActionDescriptors).ToList());
+   }
+}
+//---------------------------------------------Ʌ
+```
+
+**Part B**
+
+```C#
+public interface IEndpointConventionBuilder 
+{  
+   void Add(Action<EndpointBuilder> convention);
+}
+
+public class ControllerActionEndpointConventionBuilder : IEndpointConventionBuilder
+{
+    private readonly List<Action<EndpointBuilder>> _conventions;
+
+    public ControllerActionEndpointConventionBuilder(List<Action<EndpointBuilder>> conventions)
+    {
+        _conventions = conventions;
+    }
+
+    public void Add(Action<EndpointBuilder> convention) => _conventions.Add(convention);
+}
+
+//------------------------------------------------V
+public abstract class EndpointDataSource 
+{  
+   public abstract IChangeToken GetChangeToken();
+   public abstract IReadOnlyList<Endpoint> Endpoints { get; }
+   // ...
+}
+
+public abstract class ActionEndpointDataSourceBase : EndpointDataSource
+{
+   private readonly Lazy<IReadOnlyList<Endpoint>> _endpointsAccessor;
+   protected readonly List<Action<EndpointBuilder>> Conventions;
+
+   protected ActionEndpointDataSourceBase(IActionDescriptorCollectionProvider provider)
+   {
+      Conventions = new List<Action<EndpointBuilder>>();
+      _endpointsAccessor = new Lazy<IReadOnlyList<Endpoint>>(() => CreateEndpoints(provider.ActionDescriptors, Conventions));
+   }
+
+   public override IReadOnlyList<Endpoint> Endpoints => _endpointsAccessor.Value;
+   public override IChangeToken GetChangeToken() => NullChangeToken.Instance;
+   protected abstract List<Endpoint> CreateEndpoints(IReadOnlyList<ActionDescriptor> actions, IReadOnlyList<Action<EndpointBuilder>> conventions);
+}
+//------------------------------------------------Ʌ
+
+//---------------------------------------------V
+public class ControllerActionEndpointDataSource : ActionEndpointDataSourceBase
+{
+   private readonly List<ConventionalRouteEntry> _conventionalRoutes;
+   private int _order;
+   private readonly RoutePatternTransformer _routePatternTransformer;
+   private readonly RequestDelegate _requestDelegate;
+   public ControllerActionEndpointConventionBuilder DefaultBuilder { get; }
+
+   public ControllerActionEndpointDataSource(IActionDescriptorCollectionProvider provider, RoutePatternTransformer transformer) : base(provider)
+   {
+      _conventionalRoutes = new List<ConventionalRouteEntry>();
+      _order = 0;
+      _routePatternTransformer = transformer;
+      _requestDelegate = ProcessRequestAsync;
+      DefaultBuilder = new ControllerActionEndpointConventionBuilder(base.Conventions);
+   }
+
+   public ControllerActionEndpointConventionBuilder AddRoute(string routeName, 
+                                                             string pattern, 
+                                                             RouteValueDictionary defaults, 
+                                                             IDictionary<string, object> constraints,     
+                                                             RouteValueDictionary dataTokens)
+   {
+      List<Action<EndpointBuilder>> conventions = new List<Action<EndpointBuilder>>();
+      order++;
+      _conventionalRoutes.Add(new ConventionalRouteEntry(routeName, pattern, defaults,constraints, dataTokens, _order, conventions));
+      return new ControllerActionEndpointConventionBuilder(conventions);
+   }
+
+   protected override List<Endpoint> CreateEndpoints(IReadOnlyList<ActionDescriptor> actions, IReadOnlyList<Action<EndpointBuilder>> conventions)
+   {
+      var endpoints = new List<Endpoint>();
+
+      foreach (ActionDescriptor action in actions)
+      {
+         var attributeInfo = action.AttributeRouteInfo;
+         if (attributeInfo == null)   // convention routing
+         {
+            foreach (ConventionalRouteEntry route in _conventionalRoutes)
+            {
+               RoutePattern pattern = _routePatternTransformer.SubstituteRequiredValues(route.Pattern, action.RouteValues);
+               if (pattern != null)
+               {
+                  var builder = new RouteEndpointBuilder(_requestDelegate, pattern, route.Order);
+                  builder.Metadata.Add(action);
+                  endpoints.Add(builder.Build());
+               }
+            }
+         }
+         else  // convention routing
+         {
+            RoutePattern original = RoutePatternFactory.Parse(attributeInfo.Template);
+            RoutePattern pattern = _routePatternTransformer.SubstituteRequiredValues(original, action.RouteValues);
+            if (pattern != null)
+            {
+               var builder = new RouteEndpointBuilder(_requestDelegate, pattern, attributeInfo.Order);
+               builder.Metadata.Add(action);
+               endpoints.Add(builder.Build());
+            }
+         }
+      }
+
+      return endpoints;
+   }
+
+   private Task ProcessRequestAsync(HttpContext httContext)
+   {
+      var endpoint = httContext.GetEndpoint();
+      var actionDescriptor = endpoint.Metadata.GetMetadata<ActionDescriptor>();
+      var actionContext = new ActionContext
+      {
+         ActionDescriptor = actionDescriptor,
+         HttpContext = httContext
+      };
+
+      var invokerFactory = httContext.RequestServices.GetRequiredService<IActionInvokerFactory>();
+      IActionInvoker invoker = invokerFactory.CreateInvoker(actionContext);
+
+      return invoker.InvokeAsync();
+   }
+}
+//---------------------------------------------Ʌ
+
+internal struct ConventionalRouteEntry
+{
+    public string RouteName;
+    public RoutePattern Pattern { get; }
+    public RouteValueDictionary DataTokens { get; }
+    public int Order { get; }
+    public IReadOnlyList<Action<EndpointBuilder>> Conventions { get; }
+
+    public ConventionalRouteEntry(string routeName, string pattern,
+        RouteValueDictionary defaults, IDictionary<string, object> constraints,
+        RouteValueDictionary dataTokens, int order,
+        List<Action<EndpointBuilder>> conventions)
+    {
+        RouteName = routeName;
+        DataTokens = dataTokens;
+        Order = order;
+        Conventions = conventions;
+        Pattern = RoutePatternFactory.Parse(pattern, defaults, constraints);
+    }
+}
+```
+
+**Part C**
+
+```C#
+public class ActionContext 
+{
+   public ActionDescriptor ActionDescriptor { get; set; }
+   public HttpContext HttpContext { get; set; }
+}
+
+public abstract class Controller
+{
+   public ActionContext  ActionContext { get; internal set; }
+}
+
+public interface IActionInvoker
+{
+   Task InvokeAsync();
+}
+
+public interface IActionInvokerFactory
+{
+   IActionInvoker CreateInvoker(ActionContext actionContext);
+}
+
+public class ActionInvokerFactory : IActionInvokerFactory
+{
+    public IActionInvoker CreateInvoker(ActionContext actionContext) => new ControllerActionInvoker(actionContext);
+}
+
+public class ControllerActionInvoker : IActionInvoker
+{
+   public ActionContext ActionContext { get; }
+   public ControllerActionInvoker(ActionContext actionContext) => ActionContext = actionContext;
+   public Task InvokeAsync()
+   {
+      var actionDescriptor = (ControllerActionDescriptor)ActionContext.ActionDescriptor;
+      var controllerType = actionDescriptor.ControllerType;
+      var requestServies = ActionContext.HttpContext.RequestServices;
+      var controllerInstance = ActivatorUtilities.CreateInstance(requestServies, controllerType);
+      
+      if (controllerInstance is Controller controller)
+      {
+         controller.ActionContext = ActionContext;
+      }
+
+      var actionMethod = actionDescriptor.Method;
+      var result = actionMethod.Invoke(controllerInstance, new object[0]);
+        
+      return result is Task task ? task : Task.CompletedTask;
+    }
+}
+```
 
 
 

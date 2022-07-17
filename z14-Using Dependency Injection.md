@@ -255,6 +255,7 @@ internal interface IServiceProviderEngineCallback {
    void OnResolve(Type serviceType, IServiceScope scope);
 }
 
+//--------------------------------------------------V
 public static class ServiceProviderServiceExtensions {
    // return null if there is no such service
    public static T GetService<T>(this IServiceProvider provider) {
@@ -279,7 +280,7 @@ public static class ServiceProviderServiceExtensions {
       return provider.GetRequiredService<IServiceScopeFactory>().CreateScope();   
    }
 }
-
+//--------------------------------------------------Ʌ
 //-----------------------------------------------------------------------------------V
 public sealed class ServiceProvider : IServiceProvider, IDisposable, IServiceProviderEngineCallback {  //-----------------------------c2
    private readonly IServiceProviderEngine _engine;
@@ -340,8 +341,8 @@ internal abstract class ServiceProviderEngine : IServiceProviderEngine, IService
       CallSiteFactory = new CallSiteFactory(serviceDescriptors);
       CallSiteFactory.Add(typeof(IServiceProvider), new ServiceProviderCallSite());   // <-----------------this is why we can inject IServiceProvider into our services
 
-      // I think this is related to the ServiceProviderServiceExtensions.CreateScope method
-      CallSiteFactory.Add(typeof(IServiceScopeFactory), new ServiceScopeFactoryCallSite());  
+      // this is related to the ServiceProviderServiceExtensions.CreateScope method
+      CallSiteFactory.Add(typeof(IServiceScopeFactory), new ConstantCallSite(typeof(IServiceScopeFactory), Root)); 
       
       RealizedServices = new ConcurrentDictionary<Type, Func<ServiceProviderEngineScope, object>>();
    }
@@ -932,6 +933,7 @@ public class HomeController : Controller {
    }
 }
 ```
+Another question is, what if we want to access root scope/container to resolve singleton services? well, the question is, do you really need to access root scope to do that? The answer is no, we can resolve singleton service from request scope, check the source code of both versions of MSDI, you will also see if you want to create a new scope, `rootScope.CreateScope()` is the same as `requestScope.CreateScope()`.
 
 **Fact Two**: Root ServiceProvder is actully not the one get passed
 
@@ -940,7 +942,7 @@ class Program {
    static void Main(string[] args) {
       var services = new ServiceCollection();
      
-      services.AddScoped(sp => {  // <---------------scopedDelegate
+      services.AddScoped(sp => { 
          return new MyService();   
          // breakpointerB
       });
@@ -989,7 +991,7 @@ class Program {
 
       IServiceScope requestScope = container.CreateScope();
 
-      var myService1 = container.GetRequiredService<MyServiceOne>();                 // a
+      var myService1 = container.GetRequiredService<MyServiceOne>();                        // a
 
       var myService2 = requestScope.ServiceProvider.GetRequiredService<MyServiceTwo>();     // b
 
@@ -1009,7 +1011,8 @@ class MyServiceThree {
    public MyServiceThree() { }
 }
 ```
-`sp1` is the container's root scope (`ServiceProvider.Root`) for sure and `sp3` is request scope for sure, what about `sp2`? We resolve it from the request scope, so will `sp2` be the root scope too? **No, `sp2` is root scope too**. 
+`sp1` is the container's root scope (`ServiceProvider.Root`) for sure and `sp3` is request scope for sure, what about `sp2`?  **`sp2` is root scope too**. 
+
 
 ## New Version of MSDI- To work in the future to understand everything (probably after reviewing CLR via C#'s last two chapters)
 

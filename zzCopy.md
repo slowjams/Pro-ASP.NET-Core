@@ -1,910 +1,1831 @@
-Middlwares Source Code
+Chapter 13-URL Routing
 ==============================
 
-A. `StaticFileMiddleware`
-B. `ExceptionHandlerMiddleware`
-C. `CookiePolicyMiddleware`
-D. `SessionMiddleware`
+URL routing solves these problems by introducing middleware (actually two middlewares) that takes care of matching request URLs so that components, called endpoints, can focus on responses. The mapping between endpoints and the URLs they require is expressed in a ***route***. The routing middleware processes the URL, inspects the set of routes and finds the endpoint to handle the request, a process known as ***routing***. An endpoint represents a handler (`RequestDelegate`) for a request, and it also provides a container for metadata, Many behaviors in the routing process can be controlled by the corresponding metadata:
 
+![alt text](./zImages/13-4.png "Title")
 
-## A-StaticFileMiddleware
--------------------------
+In ASP.NET Core 3, routing is consisted of two processes: Endpoint Selection and Endpoint Invoke
+
+![alt text](./zImages/13-5.png "Title")
+
 ```C#
-public class Startup {
-
-   public void ConfigureServices(IServiceCollection services) {  
-
-   }
+public class Startup 
+{
+   public void ConfigureServices(IServiceCollection services) { }
 
    public void Configure(IApplicationBuilder app, IWebHostEnvironment env) {
-      if (env.IsDevelopment()) {
-         app.UseDeveloperExceptionPage();
-      }
-                        
-      app.UseStaticFiles(new StaticFileOptions {   // <--------------------------------------------------------
-         // ContentRootPath is the project path
-         FileProvider = new PhysicalFileProvider($"{env.ContentRootPath}/staticfiles"),  // overwrite ContentRootPath so it doesn't need to be wwwroot
-         RequestPath = "/files"  // match urls such as http://localhost:5000/files/hello.html
+      ...
+      app.Map("/branch", app => { 
+         app.Run(new QueryStringMiddleWare().Invoke);
       });
 
-      app.UseRouting();
-      app.UseEndpoints(endpoints => {   
-         endpoints.MapGet("/", async context => {   
-            await context.Response.WriteAsync("Hello World!");        
+      app.UseRouting();  // <---------------------------------A (select an endpint) using EndpointRoutingMiddleware
+                         //EndpointRoutingMiddleware will associate the endpoint with HttpContext, it will also set HttpContext's RouteValueDictionary values
+     
+      app.UseEndpoints(endpoints => {  // <------------------ B (register mapping and invoke endpoint), using EndpointRoutingMiddleware
+         
+         endpoints.MapGet("routing", async context => {    // endpoints is IEndpointRouteBuilder
+            await context.Response.WriteAsync("Request Was Routed");
+         });
+
+         endpoints.MapGet("{first}/{second}/{third}", async context => { 
+            foreach (var kvp in context.Request.RouteValues) {
+               await context.Response.WriteAsync($"{kvp.Key}: {kvp.Value}\n");
+            }
+         });
+
+         endpoints.Map("{number:int}", async context => {
+            await context.Response.WriteAsync("Routed to the int endpoint");
+         })
+         .WithDisplayName("Int Endpoint")                  // WithDisplayName is an extension method of IEndpointConventionBuilder
+         .Add(b => ((RouteEndpointBuilder)b).Order = 1);   // Add is the native method of IEndpointConventionBuilder
+
+          endpoints.Map("{number:double}", async context => {
+            await context.Response.WriteAsync("Routed to the double endpoint");
+         })
+         .WithDisplayName("Double Endpoint")
+         .Add(b => ((RouteEndpointBuilder)b).Order = 2);
       });
-   }
-}
-```
-```C#
-//--------------------------------------V
-public static class StaticFileExtensions {
-   // ...
-   public static IApplicationBuilder UseStaticFiles(this IApplicationBuilder app) {  
-      return app.UseMiddleware<StaticFileMiddleware>();
-   }
 
-   public static IApplicationBuilder UseStaticFiles(this IApplicationBuilder app, StaticFileOptions options) {
-      return app.UseMiddleware<StaticFileMiddleware>(Options.Create(options));
-   }
-}
-//-------------------------------------Ʌ
-//-------------------------------V
-public class StaticFileMiddleware {    // <------------------------------------a
-   private readonly StaticFileOptions _options;
-   private readonly PathString _matchUrl;
-   private readonly RequestDelegate _next;
-   private readonly ILogger _logger;
-   private readonly IFileProvider _fileProvider;
-   private readonly IContentTypeProvider _contentTypeProvider; 
-
-   public StaticFileMiddleware(RequestDelegate next, IWebHostEnvironment hostingEnv, IOptions<StaticFileOptions> options, ILoggerFactory loggerFactory) {
-      _next = next;
-      _options = options.Value;
-      _contentTypeProvider = _options.ContentTypeProvider ?? new FileExtensionContentTypeProvider();
-      _fileProvider = _options.FileProvider ?? Helpers.ResolveFileProvider(hostingEnv);
-      _matchUrl = _options.RequestPath;
-      _logger = loggerFactory.CreateLogger<StaticFileMiddleware>();
-   }
-
-   public Task Invoke(HttpContext context) {
-      if (!ValidateNoEndpoint(context)) {
-         _logger.EndpointMatched();
-      } 
-      else if (!ValidateMethod(context)) {
-         _logger.RequestMethodNotSupported(context.Request.Method);
-      }
-      else if (!ValidatePath(context, _matchUrl, out var subPath)) {
-         _logger.PathMismatch(subPath);
-      }
-      else if (!LookupContentType(_contentTypeProvider, _options, subPath, out var contentType)) {
-         _logger.FileTypeNotSupported(subPath);
-      }
-      else {
-         // If we get here, we can try to serve the file
-         return TryServeStaticFile(context, contentType, subPath);
-      }
-
-      return _next(context);
-   }
-   // ...  
-}
-//-------------------------------Ʌ
-//----------------------------V
-public class StaticFileOptions : SharedOptionsBase {
-   internal static readonly Action<StaticFileResponseContext> _defaultOnPrepareResponse = _ => { };
-   public StaticFileOptions() : this(new SharedOptions()) {
-
-   }
-   // ...
-   public IContentTypeProvider ContentTypeProvider { get; set; } = default!;
-   public string? DefaultContentType { get; set; }
-   public bool ServeUnknownFileTypes { get; set; }
-   public HttpsCompressionMode HttpsCompression { get; set; } = HttpsCompressionMode.Compress;
-   // called after the status code and headers have been set, but before the body has been written, can be used to add or change the response headers
-   public Action<StaticFileResponseContext> OnPrepareResponse { get; set; }
-}
-//----------------------------Ʌ
-//----------------------------V
-public class SharedOptions {
-   private PathString _requestPath;
-   public SharedOptions() {
-      RequestPath = PathString.Empty;
-   }
-
-   public PathString RequestPath { get; set; }
-   public IFileProvider? FileProvider { get; set; }
-   public bool RedirectToAppendTrailingSlash { get; set; } = true;
-}
-//----------------------------Ʌ
-```
-
-## B-ExceptionHandlerMiddleware 
--------------------------------
-```C#
-public class Startup {
-
-   public void ConfigureServices(IServiceCollection services) {  
-   }
-
-   public void Configure(IApplicationBuilder app, IWebHostEnvironment env) {
-      if (env.IsProduction()) {
-         app.UseExceptionHandler("/error.html");  // <------------------
-      } else {
-         app.UseDeveloperExceptionPage();  // we don't want to use it in production as we want to provide an custom error page for users
-      }
-                              
-      app.UseRouting();
-      app.UseEndpoints(endpoints => {   
-         endpoints.MapGet("/", async context => {   
-            await context.Response.WriteAsync("Hello World!");        
+      app.Use(async (context, next) => {
+         await context.Response.WriteAsync("Terminal Middleware Reached");
       });
    }
 }
 ```
+
+## Demystifying Routing Process
+
+1. `EndpointRoutingMiddleware` middleware (Part A)
+2. `EndpointMiddleware` middleware (Part B)
+
+#### Part A
+
+**a1**: When `app.UseRouting()` is called, first .net checks if `service.AddRouting()` is called. Check the DI part in the next section for details. Note that you don't need to call `service.AddRouting()` manually, `Host.CreateDefaultBuilder()` will call it automatically.
+
+**a2**: `ApplicationBuilder.Properties` will be associated with an `DefaultEndpointRouteBuilder`:
+
+![alt text](./zImages/13-1.png "Title") 
+
+`DefaultEndpointRouteBuilder` represents a collection of Endpoint instances as `EndpointDataSource`: 
+
+![alt text](./zImages/13-2.png "Title") 
+
+note that `DefaultEndpointRouteBuilder.DataSources` stores a collection of `ModelEndpointDataSource` (see s1), which is setup by part B
+
+**a3**: `EndpointRoutingMiddleware` middleware is used.
+
+**a4**: `DfaMatcher` will associate an endpoint to the `HttpContext` object
+
+#### Part B
+
+**b1**: checks if `service.AddRouting()` is called, same as a1
+
+**b2**: remember in a2 we associate a DefaultEndpointRouteBuilder in ApplicationBuilder's property? See the exampleA and MapExtensions's Map() method to see how it create `ApplicationBuilder.New()`, then you will see why we use `object.ReferenceEquals()` to make sure there is matching `UseRouing` and `UseEndpoints`.
+The main purpose of b2 is to retrieve the `DefaultEndpointRouteBuilder` that is created from Part A, so that it can be used at b3.
+
+**b3**: `MapMethods()` extension method is called; then `RoutePatternFactory.Parse(pattern)` is passed to the Map method. If you do sth like `RoutePattern rt = RoutePatternFactory.Parse("api/{first=syndey}/{second}/{third}");`, `RoutePattern` would be sth like:
+
+![alt text](./zImages/13-3.png "Title") 
+
+b3 is quite important, so I will explain it in a seperate section
+
+**b4**: create an instance of `RouteEndpointBuilder` which is a specific version of `EndpointBuilder`, this instance will be attached to DefaultEndpointRouteBuilder in b6
+
+**b5**: `DefaultEndpointRouteBuilder.DataSources` will store an instance of `ModelEndpointDataSource` (see s1)
+
+**b6**: The AddEndpointBuilder method of the instance `ModelEndpointDataSource` created at b5 will be passed with the instance of `RouteEndpointBuilder` created at b4. An instance of `DefaultEndpointConventionBuilder` will be created, and `ModelEndpointDataSource` instance's _endpointConventionBuilders property will contain it.
+
+Now the picture is like:
+
+`DefaultEndpointRouteBuilder.DataSources` -> `ModelEndpointDataSource`
+`ModelEndpointDataSource._endpointConventionBuilders` -> `DefaultEndpointConventionBuilder`
+
 ```C#
-//-------------------------------------------VV
-public static class ExceptionHandlerExtensions {
+//-----------------V
+public static class EndpointRoutingApplicationBuilderExtensions     
+{  
+   private const string EndpointRouteBuilder = "__EndpointRouteBuilder";
+   private const string GlobalEndpointRouteBuilderKey = "__GlobalEndpointRouteBuilder";
    //...
-   public static IApplicationBuilder UseExceptionHandler(this IApplicationBuilder app, string errorHandlingPath) {
-      return app.UseExceptionHandler(new ExceptionHandlerOptions 
-      {
-         ExceptionHandlingPath = new PathString(errorHandlingPath)
-      });
-   }
 
-   public static IApplicationBuilder UseExceptionHandler(this IApplicationBuilder app, ExceptionHandlerOptions options) {
-      OptionsWrapper<ExceptionHandlerOptions> iOptions = Options.Create(options);
-      return app.UseMiddleware<ExceptionHandlerMiddleware>(options);  // *
-   }
-}
+   /*
+   UseRouting's job is: 
+     1. Create a IEndpointRouteBuilder instance and stored in IApplicationBuilder.Properties
+     2. Use EndpointRoutingMiddleware middleware   
+   */
+   public static IApplicationBuilder UseRouting(this IApplicationBuilder builder) {  // <----------------------A
+      // checks if service.AddRouting() is called
+      VerifyRoutingServicesAreRegistered(builder);  // <---------a1
 
-public class ExceptionHandlerOptions {
-   public PathString ExceptionHandlingPath { get; set; }
-   public RequestDelegate? ExceptionHandler { get; set; }
-   public bool AllowStatusCode404Response { get; set; }  // controls whether the ExceptionHandlerMiddleware should consider 404 status response code to be a valid result of
-                                                         // executing the ExceptionHandler; The default value is false, server and will therefore rethrow the original exception
-}
-//-------------------------------------------ɅɅ
-//-------------------------------------V
-public class ExceptionHandlerMiddleware {
-   private readonly RequestDelegate _next;
-   private readonly ExceptionHandlerOptions _options;
-   private readonly Func<object, Task> _clearCacheHeadersDelegate;
-
-   public ExceptionHandlerMiddleware(RequestDelegate next, IOptions<ExceptionHandlerOptions> options) {
-      _next = next;
-      _options = options.Value;
-      _clearCacheHeadersDelegate = ClearCacheHeaders;
-      if (_options.ExceptionHandler == null) {
-         if (_options.ExceptionHandlingPath == null) {
-            throw new InvalidOperationException(Resources.ExceptionHandlerOptions_NotConfiguredCorrectly);
-         }
-         else 
-         {
-            _options.ExceptionHandler = _next;
-         }
-      }
-   }
-
-   public Task Invoke(HttpContext context) {
-      try {
-         var task = _next(context);
-         if (!task.IsCompletedSuccessfully) {
-            return Awaited(this, context, task);
-         }
-
-         return Awaited(this, context, task);
-      }
-      catch (Exception exception) {
-         edi = ExceptionDispatchInfo.Capture(exception);
-      }
-
-      return HandleException(context, edi);
-
-      static async Task Awaited(ExceptionHandlerMiddleware middleware, HttpContext context, Task task) {
-         ExceptionDispatchInfo? edi = null;
-         try {
-            await task;
-         }
-         catch (Exception exception) {
-            edi = ExceptionDispatchInfo.Capture(exception);
-         }
-
-         if (edi != null) {
-            await middleware.HandleException(context, edi);
-         }
-      }
-   }
-
-   private async Task HandleException(HttpContext context, ExceptionDispatchInfo edi) {
-      // we can't do anything if the response has already started, just abort
-      if (context.Response.HasStarted) {
-         edi.Throw();
-      }
-
-      PathString originalPath = context.Request.Path;
-      if (_options.ExceptionHandlingPath.HasValue) {
-         context.Request.Path = _options.ExceptionHandlingPath;
-      }
-      try {
-         var exceptionHandlerFeature = new ExceptionHandlerFeature() {
-            Error = edi.SourceException,
-            Path = originalPath.Value!,
-            Endpoint = context.GetEndpoint(),
-            RouteValues = context.Features.Get<IRouteValuesFeature>()?.RouteValues
-         }
-
-         ClearHttpContext(context);
-
-         context.Features.Set<IExceptionHandlerFeature>(exceptionHandlerFeature);
-         context.Features.Set<IExceptionHandlerPathFeature>(exceptionHandlerFeature);
-         context.Response.StatusCode = StatusCodes.Status500InternalServerError;
-         context.Response.OnStarting(_clearCacheHeadersDelegate, context.Response);
-
-         await _options.ExceptionHandler!(context);
-
-         // if the response has already started, assume exception handler was successful
-         if (context.Response.HasStarted || context.Response.StatusCode != StatusCodes.Status404NotFound || _options.AllowStatusCode404Response) {
-            return;
-         }
-
-         edi = ExceptionDispatchInfo.Capture(new InvalidOperationException($"The exception handler configured on ExceptionHandlerOptions produced a 404 status response. This InvalidOperationException containing the original exception was thrown since this is often due to a misconfigured ExceptionHandlerOptions.ExceptionHandlingPath. If the exception handler is expected to return 404 status responses then set ExceptionHandlerOptions.AllowStatusCode404Response to true.", edi.SourceException));
-      }
-      catch (Exception ex2) {
-         //.. suppress secondary exceptions, re-throw the original.
-      }
-
-      edi.Throw(); // re-throw wrapped exception or the original if we couldn't handle it
-   }
-
-   private static void ClearHttpContext(HttpContext context) {
-      context.Response.Clear();
-
-      // an endpoint may have already been set, since we will re-invoke the middleware pipeline we need to reset the endpoint and route values to ensure things are re-calculated
-      context.SetEndpoint(endpoint: null);
-      var routeValuesFeature = context.Features.Get<IRouteValuesFeature>();
-      if (routeValuesFeature != null) {
-         routeValuesFeature.RouteValues = null!;
-      }
-   }
-   
-   private static Task ClearCacheHeaders(object state) {
-      var headers = ((HttpResponse)state).Headers;
-        headers.CacheControl = "no-cache,no-store";
-        headers.Pragma = "no-cache";
-        headers.Expires = "-1";
-        headers.ETag = default;
-        return Task.CompletedTask;
-   }
-}
-//-------------------------------------Ʌ
-```
-
-## C-CookiePolicyMiddleware
-----------------------------
-
-```C#
-public class Startup {
-   public void ConfigureServices(IServiceCollection services) {
-      services.Configure<CookiePolicyOptions>(opts => {  // <--------------B0
-         opts.CheckConsentNeeded = context => true;
-      });
-   }
-
-   public void Configure(IApplicationBuilder app, IWebHostEnvironment env) {
-      if (env.IsDevelopment()) {
-         app.UseDeveloperExceptionPage();
-      }
-
-      app.UseCookiePolicy(); // <------------------------------------------B1
-
-      app.UseRouting();  
-      // ...
-   }
-}
-```
-```C#
-//--------------------------------------------------V
-public static class CookiePolicyAppBuilderExtensions {
-   
-   public static IApplicationBuilder UseCookiePolicy(this IApplicationBuilder app) {
-      return app.UseMiddleware<CookiePolicyMiddleware>();  // <------------------------------------------b1
-   }
-
-   public static IApplicationBuilder UseCookiePolicy(this IApplicationBuilder app, CookiePolicyOptions options) {
-      return app.UseMiddleware<CookiePolicyMiddleware>(Options.Create(options));  // manually create new OptionsWrapper<TOptions>(options)
-   }
-}
-//--------------------------------------------------Ʌ
-//--------------------------------------------------V
-public class CookiePolicyMiddleware {
-   private readonly RequestDelegate _next;
-   private readonly ILogger _logger;
-                                                       // <-------------------------------b0
-   public CookiePolicyMiddleware(RequestDelegate next, IOptions<CookiePolicyOptions> options, ILoggerFactory factory) {
-      Options = options.Value;
-      _next = next;
-      _logger = factory.CreateLogger<CookiePolicyMiddleware>();
-   }
-
-   public CookiePolicyOptions Options { get; set; }
-
-   public Task Invoke(HttpContext context) {
-      var feature = context.Features.Get<IResponseCookiesFeature>() ?? new ResponseCookiesFeature(context.Features) // <-------------b2
-      var wrapper = new ResponseCookiesWrapper(context, Options, feature, _logger);
-      context.Features.Set<IResponseCookiesFeature>(new CookiesWrapperFeature(wrapper));
-      context.Features.Set<ITrackingConsentFeature>(wrapper);
-
-      return _next(context);
-   }
-
-   private class CookiesWrapperFeature : IResponseCookiesFeature {
-      public CookiesWrapperFeature(ResponseCookiesWrapper wrapper) {
-         Cookies = wrapper;
-      }
-
-      public IResponseCookies Cookies { get; }
-   }
-}
-//--------------------------------------------------Ʌ
-//--------------------------------------V
-public interface IResponseCookiesFeature {  // a helper for creating the response Set-Cookie header
-   IResponseCookies Cookies { get; }
-}
-
-public class ResponseCookiesFeature : IResponseCookiesFeature {
-   private readonly IFeatureCollection _features;
-   private IResponseCookies? _cookiesCollection;
-
-   public ResponseCookiesFeature(IFeatureCollection features) {
-      _features = features ?? throw new ArgumentNullException(nameof(features));
-   }
-
-   public IResponseCookies Cookies {
-      get {
-         if (_cookiesCollection == null) {
-            _cookiesCollection = new ResponseCookies(_features);   // <-----------------------------b3
-         }
-
-         return _cookiesCollection;
-      }
-   }
-}
-//--------------------------------------Ʌ
-//------------------------------VV
-public interface IResponseCookies {
-   void Append(string key, string value);
-   void Append(string key, string value, CookieOptions options);
-   void Delete(string key);
-   void Delete(string key, CookieOptions options);
-}
-
-public interface ITrackingConsentFeature {
-   bool IsConsentNeeded { get; }
-   bool HasConsent { get; }
-   bool CanTrack { get; }   // indicates either if consent has been given or if consent is not required
-   void GrantConsent();
-   void WithdrawConsent();
-   string CreateConsentCookie();
-}
-//------------------------------ɅɅ
-```
-```C#
-//------------------------------------V
-internal partial class ResponseCookies : IResponseCookies {
-   internal const string EnableCookieNameEncoding = "Microsoft.AspNetCore.Http.EnableCookieNameEncoding";
-   internal bool _enableCookieNameEncoding = AppContext.TryGetSwitch(EnableCookieNameEncoding, out var enabled) && enabled;
-
-   private readonly IFeatureCollection _features;
-   private IHeaderDictionary Headers { get; set; }
-
-   internal ResponseCookies(IFeatureCollection features) {
-      _features = features;
-      Headers = _features.GetRequiredFeature<IHttpResponseFeature>().Headers;
-   }
-   // ...
-   public void Append(string key, string value, CookieOptions options) {
-      var setCookieHeaderValue = new SetCookieHeaderValue(_enableCookieNameEncoding ? Uri.EscapeDataString(key) : key, Uri.EscapeDataString(value)) {
-         Domain = options.Domain,
-         Path = options.Path,
-         Expires = options.Expires,
-         MaxAge = options.MaxAge,
-         Secure = options.Secure,
-         SameSite = (Net.Http.Headers.SameSiteMode)options.SameSite,
-         HttpOnly = options.HttpOnly
-      };
-
-      var cookieValue = setCookieHeaderValue.ToString();
-
-      Headers.SetCookie = StringValues.Concat(Headers.SetCookie, cookieValue);
-   }
-
-   public void Delete(string key) {
-      Delete(key, new CookieOptions() { Path = "/" });
-   }
-
-   public void Delete(string key, CookieOptions options) {
-      // ...
-   }
-}
-//------------------------------------Ʌ
-```
-```C#
-//-----------------------------------V
-internal class ResponseCookiesWrapper : IResponseCookies, ITrackingConsentFeature {
-   private const string ConsentValue = "yes";
-   private readonly ILogger _logger;
-   private bool? _isConsentNeeded;
-   private bool? _hasConsent;
-
-   public ResponseCookiesWrapper(HttpContext context, CookiePolicyOptions options, IResponseCookiesFeature feature, ILogger logger) {
-      Context = context;
-      Feature = feature;
-      Options = options;
-      _logger = logger;
-   }
-   
-   private HttpContext Context { get; }
-
-   private IResponseCookiesFeature Feature { get; }
-
-   private IResponseCookies Cookies => Feature.Cookies;
-
-   private CookiePolicyOptions Options { get; }
-
-   public bool IsConsentNeeded {
-      get {
-         if (!_isConsentNeeded.HasValue) {
-            _isConsentNeeded = Options.CheckConsentNeeded == null ? false : Options.CheckConsentNeeded(Context);
-         }
-         return _isConsentNeeded.Value;
-      }
-   }
-
-   public bool HasConsent {
-      get {
-         if (!_hasConsent.HasValue) {
-            var cookie = Context.Request.Cookies[Options.ConsentCookie.Name!];
-            _hasConsent = string.Equals(cookie, ConsentValue, StringComparison.Ordinal);
-         }
-         return _hasConsent.Value;
-      }
-   }
-
-   public bool CanTrack => !IsConsentNeeded || HasConsent;
-
-   public void GrantConsent() {
-      if (!HasConsent && !Context.Response.HasStarted) {
-         var cookieOptions = Options.ConsentCookie.Build(Context);
-         // Note policy will be applied. We don't want to bypass policy because we want HttpOnly, Secure, etc. to apply.
-         Append(Options.ConsentCookie.Name!, ConsentValue, cookieOptions);      
-      }
-      _hasConsent = true;
-   }
-
-   public void WithdrawConsent() {
-      // ... same as above except using Delete(Options.ConsentCookie.Name!, cookieOptions);
-   }
-
-   public string CreateConsentCookie() {
-      var key = Options.ConsentCookie.Name;
-      var value = ConsentValue;
-      var options = Options.ConsentCookie.Build(Context);
-
-      ApplyAppendPolicy(ref key, ref value, options);
-
-      var setCookieHeaderValue = new Net.Http.Headers.SetCookieHeaderValue(Uri.EscapeDataString(key), Uri.EscapeDataString(value)) {
-         Domain = options.Domain,
-         Path = options.Path,
-         Expires = options.Expires,
-         MaxAge = options.MaxAge,
-         Secure = options.Secure,
-         SameSite = (Net.Http.Headers.SameSiteMode)options.SameSite,
-         HttpOnly = options.HttpOnly
-      };
-
-      return setCookieHeaderValue.ToString();
-   }
-
-   private bool CheckPolicyRequired() {
-      return !CanTrack || Options.MinimumSameSitePolicy != SameSiteMode.Unspecified || Options.HttpOnly != HttpOnlyPolicy.None || Options.Secure != CookieSecurePolicy.None;
-   }
-
-   public void Append(string key, string value) {
-      if (CheckPolicyRequired() || Options.OnAppendCookie != null) {
-         Append(key, value, new CookieOptions());
+      IEndpointRouteBuilder endpointRouteBuilder;
+      if (builder.Properties.TryGetValue(GlobalEndpointRouteBuilderKey, out var obj)) {
+         endpointRouteBuilder = (IEndpointRouteBuilder)obj!;
+         // let interested parties know if UseRouting() was called while a global route builder was set
+         builder.Properties[EndpointRouteBuilder] = endpointRouteBuilder;
       } else {
-         Cookies.Append(key, value);
+         endpointRouteBuilder = new DefaultEndpointRouteBuilder(builder);  // <---------a2
+         builder.Properties[EndpointRouteBuilder] = endpointRouteBuilder;  // <-----------------  IEndpointRouteBuilder is saved in ApplicationBuilder.Properties
       }
+      return builder.UseMiddleware<EndpointRoutingMiddleware>(endpointRouteBuilder); // <---------a3
    }
 
-   public void Append(string key, string value, CookieOptions options) {
-      if (ApplyAppendPolicy(ref key, ref value, options)) {
-         Cookies.Append(key, value, options);
-      }
-   }
+   public static IApplicationBuilder UseEndpoints(this IApplicationBuilder builder, Action<IEndpointRouteBuilder> configure) {  // B
+       VerifyRoutingServicesAreRegistered(builder); // <---------b1
+       VerifyEndpointRoutingMiddlewareIsRegistered(builder, out var endpointRouteBuilder);   // <---------b2
+       configure(endpointRouteBuilder);   // <-------------b3, this applies the changes you made with: e.g endpoints.MapGet("{first}/{second}/{third}", ...) 
 
-   public void Delete(string key) {
-      if (CheckPolicyRequired() || Options.OnDeleteCookie != null) {
-         Delete(key, new CookieOptions());
-      } else {
-         Cookies.Delete(key);
-      }
-   }
-
-   public void Delete(string key, CookieOptions options) {
-      // Assume you can always delete cookies unless directly overridden in the user event
-      var issueCookie = true;
-      ApplyPolicy(key, options);
-      if (Options.OnDeleteCookie != null) {
-         var context = new DeleteCookieContext(Context, options, key) {
-            IsConsentNeeded = IsConsentNeeded,
-            HasConsent = HasConsent,
-            IssueCookie = issueCookie
-         };
-         Options.OnDeleteCookie(context);
-
-         key = context.CookieName;
-         issueCookie = context.IssueCookie;
-      }
-
-      if (issueCookie) {
-         Cookies.Delete(key, options);
-      }
-   }
-
-   private bool ApplyAppendPolicy(ref string key, ref string value, CookieOptions options) {
-      var issueCookie = CanTrack || options.IsEssential;
-      ApplyPolicy(key, options);
-      if (Options.OnAppendCookie != null) {
-         var context = new AppendCookieContext(Context, options, key, value) {
-            IsConsentNeeded = IsConsentNeeded,
-            HasConsent = HasConsent,
-            IssueCookie = issueCookie,
-         };
-         Options.OnAppendCookie(context);
-
-         key = context.CookieName;
-         value = context.CookieValue;
-         issueCookie = context.IssueCookie;
-      }
-
-      return issueCookie;
-   }
-
-   private void ApplyPolicy(string key, CookieOptions options) {
-      switch (Options.Secure) {
-         case CookieSecurePolicy.Always:
-            if (!options.Secure) {
-               options.Secure = true;           
-            }
-            break;
-         case CookieSecurePolicy.SameAsRequest:
-            // Never downgrade a cookie
-            if (Context.Request.IsHttps && !options.Secure) {
-               options.Secure = true;
-            }
-            break;
-         case CookieSecurePolicy.None:
-            break;
-         default:
-            throw new InvalidOperationException();
-      }
-
-      if (options.SameSite < Options.MinimumSameSitePolicy) {
-         options.SameSite = Options.MinimumSameSitePolicy;
-      }
-
-      switch (Options.HttpOnly) {
-         case HttpOnlyPolicy.Always:
-            if (!options.HttpOnly) {
-               options.HttpOnly = true;
-            }
-            break;
-         case HttpOnlyPolicy.None:
-            break;
-         default:
-            throw new InvalidOperationException($"Unrecognized {nameof(HttpOnlyPolicy)} value {Options.HttpOnly.ToString()}");
-      }
-   }
-}
-//-----------------------------------Ʌ
-//------------------------------V
-public class CookiePolicyOptions {
-   public SameSiteMode MinimumSameSitePolicy { get; set; } = SameSiteMode.Unspecified;
-
-   public HttpOnlyPolicy HttpOnly { get; set; } = HttpOnlyPolicy.None;
-
-   public CookieSecurePolicy Secure { get; set; } = CookieSecurePolicy.None;
-
-   public CookieBuilder ConsentCookie { get; set; } = new CookieBuilder() {
-      Name = ".AspNet.Consent",
-      Expiration = TimeSpan.FromDays(365),
-      IsEssential = true
-   };
-
-   // checks if consent policies should be evaluated on this request. The default is false
-   public Func<HttpContext, bool> CheckConsentNeeded { get; set; }
-
-   // called when a cookie is appended
-   public Action<AppendCookieContext>? OnAppendCookie { get; set; }
-
-   // called when a cookie is deleted 
-   public Action<DeleteCookieContext>? OnDeleteCookie { get; set; }
-}
-//------------------------------Ʌ
-//------------------------V
-public class CookieBuilder {
-   private string? _name;
-
-   public virtual string? Name {
-      get => _name;
-      set => _name = !string.IsNullOrEmpty(value) ? value : throw new ArgumentException(Resources.ArgumentCannotBeNullOrEmpty, nameof(value));
-   }
-
-   public virtual string? Path { get; set; }
-
-   public virtual string? Domain { get; set; }
-
-   public virtual bool HttpOnly { get; set; }
-
-   public virtual SameSiteMode SameSite { get; set; } = SameSiteMode.Unspecified;
-
-   public virtual CookieSecurePolicy SecurePolicy { get; set; }
-
-   public virtual TimeSpan? Expiration { get; set; }
-
-   public virtual TimeSpan? MaxAge { get; set; }
-
-   public virtual bool IsEssential { get; set; }
-
-   public CookieOptions Build(HttpContext context) => Build(context, DateTimeOffset.Now);
-
-   public virtual CookieOptions Build(HttpContext context, DateTimeOffset expiresFrom) {
-      return new CookieOptions {
-         Path = Path ?? "/",
-         SameSite = SameSite,
-         HttpOnly = HttpOnly,
-         MaxAge = MaxAge,
-         Domain = Domain,
-         IsEssential = IsEssential,
-         Secure = SecurePolicy == CookieSecurePolicy.Always || (SecurePolicy == CookieSecurePolicy.SameAsRequest && context.Request.IsHttps),
-         Expires = Expiration.HasValue ? expiresFrom.Add(Expiration.GetValueOrDefault()) : default(DateTimeOffset?)
-      };
-   }
-}
-```
-
-## D-SessionMiddleware
-----------------------
-
-```C#
-public class Startup {
-
-   public void ConfigureServices(IServiceCollection services) 
-   {  
-      services.AddDistributedMemoryCache();  // we need it to store session
-
-      services.AddSession(options => {  // <---------------------------
-            options.IdleTimeout = TimeSpan.FromMinutes(30);          
-            options.Cookie.IsEssential = true;  // session cookie isn't denoted as essential by default, which can cause problems when cookie consent is used
-      });
-   }
-
-   public void Configure(IApplicationBuilder app, IWebHostEnvironment env) 
-   {
-      if (env.IsDevelopment()) {
-         app.UseDeveloperExceptionPage();
-      }                        
-      
-      app.UseCookiePolicy(); // session depends on cookies, so have to use CookiePolicyMiddleware
-      app.UseSession();  // <---------------------------
-
-      app.UseRouting();
-      app.UseEndpoints(endpoints => {   
-         endpoints.MapGet("/", async context => {   
-            await context.Response.WriteAsync("Hello World!");        
-      });
-   }
-}
-```
-```C#
-public static class MemoryCacheServiceCollectionExtensions 
-{
-   public static IServiceCollection AddMemoryCache(this IServiceCollection services!!) {
-      services.AddOptions();
-      services.TryAdd(ServiceDescriptor.Singleton<IMemoryCache, MemoryCache>());  // MemoryCache is injected into MemoryDistributedCache
-      return services;
-   }
-}
-/*  public interface IDistributedCache derived:
-
-Microsoft.Extensions.Caching.Distributed.MemoryDistributedCache
-Microsoft.Extensions.Caching.SqlServer.SqlServerCache
-Microsoft.Extensions.Caching.Redis.RedisCache
-Microsoft.Extensions.Caching.StackExchangeRedis.RedisCache
-*/
-//---------------------------------------------------VVV
-public static class SessionServiceCollectionExtensions 
-{
-   public static IServiceCollection AddSession(this IServiceCollection services, Action<SessionOptions> configure) {
-      services.Configure(configure);
-      services.AddSession();
-      return services;
-   }
-
-   public static IServiceCollection AddSession(this IServiceCollection services) {
-      services.TryAddTransient<ISessionStore, DistributedSessionStore>();
-      services.AddDataProtection();
-      return services;
-   }
-}
-//---------------------------------------------------ɅɅɅ
-public class SessionOptions 
-{
-   private CookieBuilder _cookieBuilder = new SessionCookieBuilder();
-
-   public CookieBuilder Cookie {
-      get => _cookieBuilder;
-      set => _cookieBuilder = value ?? throw new ArgumentNullException(nameof(value));
-   }
-
-   // how long the session can be idle before its contents are abandoned. Each session access resets the timeout
-   // note this only applies to the content of the session, not the cookie
-   public TimeSpan IdleTimeout { get; set; } = TimeSpan.FromMinutes(20);
-   
-   // maximum amount of time allowed to load a session from the store or to commit it back to the store
-   public TimeSpan IOTimeout { get; set; } = TimeSpan.FromMinutes(1);
-
-   private class SessionCookieBuilder : CookieBuilder {
-      public SessionCookieBuilder() {
-         Name = SessionDefaults.CookieName;
-         Path = SessionDefaults.CookiePath;
-         SecurePolicy = CookieSecurePolicy.None;
-         SameSite = SameSiteMode.Lax;
-         HttpOnly = true;
-         IsEssential = false;  // session is considered non-essential as it's designed for ephemeral data
-      }
-
-      public override TimeSpan? Expiration {
-         get => null;
-         set => throw new InvalidOperationException(nameof(Expiration) + " cannot be set for the cookie defined by " + nameof(SessionOptions));
-      }
-   }
-}
-//---------------------------------------------------ɅɅ
-public static class SessionMiddlewareExtensions 
-{
-   public static IApplicationBuilder UseSession(this IApplicationBuilder app) {
-      return app.UseMiddleware<SessionMiddleware>();
-   }
-
-   public static IApplicationBuilder UseSession(this IApplicationBuilder app, SessionOptions options) {
-      return app.UseMiddleware<SessionMiddleware>(Options.Create(options));
-   }
-}
-//---------------------------------------------------Ʌ
-//----------------------------V
-public class SessionMiddleware 
-{
-   private const int SessionKeyLength = 36; // "382c74c3-721d-4f34-80e5-57657b6cbc27"
-   private static readonly Func<bool> ReturnTrue = () => true;
-   private readonly RequestDelegate _next;
-   private readonly SessionOptions _options;
-   private readonly ILogger _logger;
-   private readonly ISessionStore _sessionStore;
-   private readonly IDataProtector _dataProtector;
-
-   public SessionMiddleware(
-        RequestDelegate next,
-        ILoggerFactory loggerFactory,
-        IDataProtectionProvider dataProtectionProvider,
-        ISessionStore sessionStore,
-        IOptions<SessionOptions> options)
-   {
-      _next = next;
-      _logger = loggerFactory.CreateLogger<SessionMiddleware>();
-      _dataProtector = dataProtectionProvider.CreateProtector(nameof(SessionMiddleware));
-      _options = options.Value;
-      _sessionStore = sessionStore;
-   }
-
-   public async Task Invoke(HttpContext context) 
-   {
-       var isNewSessionKey = false;
-       Func<bool> tryEstablishSession = ReturnTrue;
-       var cookieValue = context.Request.Cookies[_options.Cookie.Name!];
-       var sessionKey = CookieProtection.Unprotect(_dataProtector, cookieValue, _logger);
-       if (string.IsNullOrWhiteSpace(sessionKey) || sessionKey.Length != SessionKeyLength) 
-       {
-          // no valid cookie, new session
-          var guidBytes = new byte[16];
-          RandomNumberGenerator.Fill(guidBytes);
-          sessionKey = new Guid(guidBytes).ToString();
-          cookieValue = CookieProtection.Protect(_dataProtector, sessionKey);
-          var establisher = new SessionEstablisher(context, cookieValue, _options);
-          tryEstablishSession = establisher.TryEstablishSession;
-          isNewSessionKey = true;
-       }
-
-       SessionFeature feature = new SessionFeature();
-       feature.Session = _sessionStore.Create(sessionKey, _options.IdleTimeout, _options.IOTimeout, tryEstablishSession, isNewSessionKey);
-       context.Features.Set<ISessionFeature>(feature);
-
-       try 
-       {
-          await _next(context);
-       }
-       fially 
-       {
-          context.Features.Set<ISessionFeature?>(null);
-
-          if (feature.Session != null)
-          {
-             try
-             {
-                await feature.Session.CommitAsync();
-             }
-             catch (OperationCanceledException)
-             {
-                _logger.SessionCommitCanceled();
-             }
-             catch (Exception ex)
-             {
-                _logger.ErrorClosingTheSession(ex);
-             }
+       var routeOptions = builder.ApplicationServices.GetRequiredService<IOptions<RouteOptions>>();
+       foreach (var dataSource in endpointRouteBuilder.DataSources) {   
+          if (!routeOptions.Value.EndpointDataSources.Contains(dataSource)) {
+             routeOptions.Value.EndpointDataSources.Add(dataSource);   // <-------------------------b7?
           }
        }
+
+       return builder.UseMiddleware<EndpointMiddleware>();  // <-------------------------b8
    }
 
-   private class SessionEstablisher
-   {
-      private readonly HttpContext _context;
-      private readonly string _cookieValue;
-      private readonly SessionOptions _options;
-      private bool _shouldEstablishSession;
+   private static void VerifyRoutingServicesAreRegistered(IApplicationBuilder app) {  // <---------a1
+      // verify if `service.AddRouting()` was called before calling UseEndpointRouting/UseEndpoint
+      if (app.ApplicationServices.GetService(typeof(RoutingMarkerService)) == null) {   // RoutingMarkerService is just a marker class
+         throw new InvalidOperationException(...);
+      }
+   }
 
-      public SessionEstablisher(HttpContext context, string cookieValue, SessionOptions options)
-      {
-         _context = context;
-         _cookieValue = cookieValue;
-         _options = options;
-         context.Response.OnStarting(OnStartingCallback, state: this);
+   private static void VerifyEndpointRoutingMiddlewareIsRegistered(IApplicationBuilder app, out IEndpointRouteBuilder endpointRouteBuilder) {
+      if (!app.Properties.TryGetValue(EndpointRouteBuilder, out var obj)) {  // a2 adds IEndpointRouteBuilder to application builder's property
+         throw new InvalidOperationException("Please add UseRouting to use EndpointRoutingMiddleware");
       }
 
-      private static Task OnStartingCallback(object state)
-      {
-         var establisher = (SessionEstablisher)state;
-         if (establisher._shouldEstablishSession)
-         {
-            establisher.SetCookie();
-         }
+      endpointRouteBuilder = (IEndpointRouteBuilder)obj!;
+
+      // this check handles the case where Map(...) that forks the pipeline has a matching UseRouting() and UseEndpoints(), see exampleA
+      if (endpointRouteBuilder is DefaultEndpointRouteBuilder defaultRouteBuilder && !object.ReferenceEquals(app, defaultRouteBuilder.ApplicationBuilder)) {
+         var message = "EndpointRoutingMiddleware and EndpointMiddleware must be added to the same IApplicationBuilder instance ...";
+         throw new InvalidOperationException(message);
+      }
+   }
+}
+//--------------------V
+internal sealed partial class EndpointRoutingMiddleware {   // <---------a3
+   private readonly MatcherFactory _matcherFactory;
+   private readonly ILogger _logger;
+   private readonly EndpointDataSource _endpointDataSource;
+   private readonly DiagnosticListener _diagnosticListener;
+   private readonly RequestDelegate _next;
+
+   public EndpointRoutingMiddleware(
+      MatcherFactory matcherFactory, 
+      ILogger<EndpointRoutingMiddleware> logger,
+      IEndpointRouteBuilder endpointRouteBuilder,  // I think it is the one pass the UseMiddlware method, and ActivatorUtilities.CreateInstance is smart enough to detect?
+      DiagnosticListener diagnosticListener,
+      RequestDelegate next)
+   {
+      // endpointRouteBuilder.DataSources is ICollection<EndpointDataSource>  
+      // where EndpointDataSource represents a list of Endpoint
+      // CompositeEndpointDataSource can takes a list of EndpointDataSource
+      _endpointDataSource = new CompositeEndpointDataSource(endpointRouteBuilder.DataSources);                                                                                     
+   }
+
+   public Task Invoke(HttpContext httpContext) 
+   {
+      var endpoint = httpContext.GetEndpoint();  // there is already an endpoint, skip matching completely
+      if (endpoint != null) {
+         return _next(httpContext);
+      }
+
+      // ...
+      
+      // matcher is DfaMatcher whose job is to associate an endpoint to a HttpContext (by analysing httpContext.Request.Path.Value) 
+      // using a complex process to determine which endpoints to associate
+      var matcher = _matcherFactory.CreateMatcher(_endpointDataSource);   // <---------------------- we pass IEndpointRouteBuilder.DataSources that contains RouteEndpointBuilder 
+                                                                          // which contains RequestDelegate and RoutePattern, so DfaMatcher can match it withHttpContext's URL
+
+     
+      // call httpContext.SetEndpoint(candidate.Endpoint) when find a candicate
+      await matcher.MatchAsync(httpContext);    // <-------------------------------------a4
+     
+      // ... tweak the code, inline sepearate private method
+      var endpoint = httpContext.GetEndpoint();
+      if (endpoint == null) {   //  DfaMatcher didn't find any matching
+          Log.MatchFailure(_logger);  
+      } else {
+         // ...
+         Log.MatchSuccess(_logger, endpoint);
+      }
+
+      return _next(httpContext);       
+   }
+}
+//--------------------Ʌ
+
+//--------------V
+public interface IEndpointFeature
+{
+   Endpoint? Endpoint { get; set; }
+}
+
+public static class EndpointHttpContextExtensions
+{
+   public static Endpoint GetEndpoint(this HttpContext context)
+   {
+      return context.Features.Get<IEndpointFeature>().Endpoint;
+   }
+
+   public static void SetEndpoint(this HttpContext context, Endpoint endpoint)  // DFA matcher will add the matched endpoint to HttpContext's Feature property
+   {
+      var feature = context.Features.Get<IEndpointFeature>();
+       // ...  null check, if null do `feature = new EndpointFeature()`
+      feature.Endpoint = endpoint;
+   }
+}
+//--------------Ʌ
+
+//--------------------V
+internal abstract class Matcher
+{
+   // find and set an Endpoint to HttpContext using the extension method of HttpContext.SetEndpoint()
+   public abstract Task MatchAsync(HttpContext httpContext);
+}
+
+internal sealed class DfaMatcher : Matcher   
+{
+   // ...
+   private readonly EndpointSelector _selector;
+
+   public sealed override Task MatchAsync(HttpContext httpContext)  // <------------------a4
+   {  
+      var path = httpContext.Request.Path.Value!;
+      
+      // First tokenize the path into series of segments.
+      Span<PathSegment> buffer = stackalloc PathSegment[_maxSegmentCount];
+      var count = FastPathTokenizer.Tokenize(path, buffer);
+      var segments = buffer.Slice(0, count);
+      
+      var (candidates, policies) = FindCandidateSet(httpContext, path, segments);
+      var candidateCount = candidates.Length;
+      if (candidateCount == 0) {
          return Task.CompletedTask;
       }
 
-      private void SetCookie()
-      {
-         var cookieOptions = _options.Cookie.Build(_context);
-
-         var response = _context.Response;
-         response.Cookies.Append(_options.Cookie.Name!, _cookieValue, cookieOptions);
-
-         var responseHeaders = response.Headers;
-         responseHeaders.CacheControl = "no-cache,no-store";
-         responseHeaders.Pragma = "no-cache";
-         responseHeaders.Expires = "-1";
+      var policyCount = policies.Length;
+      // This is a fast path for single candidate, 0 policies and default selector
+      if (candidateCount == 1 && policyCount == 0 && _isDefaultEndpointSelector) {
+         // Just strict path matching (no route values)
+         if (candidate.Flags == Candidate.CandidateFlags.None) {
+            httpContext.SetEndpoint(candidate.Endpoint);  // <--------------------------- 
+            return Task.CompletedTask;
+         }
       }
 
-      internal bool TryEstablishSession()
+      // ... complicated matching process
+
+      if (policyCount == 0 && _isDefaultEndpointSelector) 
       {
-         return (_shouldEstablishSession |= !_context.Response.HasStarted);
+         DefaultEndpointSelector.Select(httpContext, candidateState);   // <--------------------- eventually call httpContext.SetEndpoint()
+         return Task.CompletedTask;
+      }
+      else if (policyCount == 0)
+      {
+         // ...
+      }
+
+      // ...
+   }
+
+   // ...
+}
+//--------------------Ʌ
+//--------------------V
+public interface IEndpointFeature {
+   Endpoint? Endpoint { get; set; }
+}
+
+public static class EndpointHttpContextExtensions {
+
+   public static Endpoint? GetEndpoint(this HttpContext context) {
+
+      return context.Features.Get<IEndpointFeature>()?.Endpoint;
+   }
+
+   public static void SetEndpoint(this HttpContext context, Endpoint endpoint) {   // <------------------------
+
+      var feature = context.Features.Get<IEndpointFeature>();
+
+      if (feature == null) {
+         feature = new EndpointFeature();
+         context.Features.Set(feature);
+      }
+
+      feature.Endpoint = endpoint;
+   }
+
+   private class EndpointFeature : IEndpointFeature {
+      public Endpoint? Endpoint { get; set; }
+   }
+}
+//--------------------Ʌ
+//--------------------V
+public abstract class EndpointSelector   
+{  
+   public abstract Task SelectAsync(HttpContext httpContext, CandidateSet candidates);
+}
+
+internal sealed class DefaultEndpointSelector : EndpointSelector {
+
+   public override Task SelectAsync(HttpContext httpContext, CandidateSet candidateSet) {
+      Select(httpContext, candidateSet.Candidates);
+      return Task.CompletedTask;
+   }
+   
+   // ...
+
+   internal static void Select(HttpContext httpContext, CandidateState[] candidateState) {
+      
+      switch (candidateState.Length) {
+
+         case 0: {
+            break;
+         }
+         
+         case 1: {
+            ref var state = ref candidateState[0];
+            if (CandidateSet.IsValidCandidate(ref state)) {
+               httpContext.SetEndpoint(state.Endpoint);  // <-------------- associate HttpContext with an endpoint
+               httpContext.Request.RouteValues = state.Values!;
+            }
+            break;
+         }
+
+         default: {
+            ProcessFinalCandidates(httpContext, candidateState);  // slow path, There's more than one candidate (to say nothing of validity) so we have to process for ambiguities
+                                                                  // compare each matching candidate's score to determine which one suits the most
+            break;
+         }
       }
    }
 }
-//----------------------------Ʌ
+//--------------------Ʌ
+//--------------------V
+public sealed class CandidateSet {  // represent a set of Endpoint candidates that have been matched
+   
+   internal CandidateState[] Candidates;
+
+   public CandidateSet(Endpoint[] endpoints, RouteValueDictionary[] values, int[] scores) {  // The list of endpoints, sorted in descending priority order
+      
+      if (endpoints.Length != values.Length || endpoints.Length != scores.Length) {
+         throw new ArgumentException($"The provided {nameof(endpoints)}, {nameof(values)}, and {nameof(scores)} must have the same length.");
+      }
+
+      Candidates = new CandidateState[endpoints.Length];
+      for (var i = 0; i < endpoints.Length; i++) {
+         Candidates[i] = new CandidateState(endpoints[i], values[i], scores[i]);
+      }
+   }
+   // ...
+   internal static bool IsValidCandidate(ref CandidateState candidate) {
+      return candidate.Score >= 0;
+   }
+}
+
+public struct CandidateState {  // the state associated with a candidate in a CandidateSet
+
+   internal CandidateState(Endpoint endpoint, int score) {
+      Endpoint = endpoint;
+      Score = score;
+      Values = null;
+   }
+
+   internal CandidateState(Endpoint endpoint, RouteValueDictionary? values, int score) {
+      // ...
+   }
+
+   public Endpoint Endpoint { get; }
+   public int Score { get; }
+   public RouteValueDictionary? Values { get; internal set; }
+}
+
+internal readonly struct Candidate {
+
+   public readonly Endpoint Endpoint;
+   public readonly CandidateFlags Flags;
+   // data for creating the RouteValueDictionary. We assign each key its own slot
+   // then when we process parameters, we don't need to operate on the RouteValueDictionary 
+   // we can just operate on an array, which is much much faster.
+   public readonly KeyValuePair<string, object>[] Slots;
+   // list of parameters to capture
+   public readonly (string parameterName, int segmentIndex, int slotIndex)[] Captures;
+   public readonly (RoutePatternPathSegment pathSegment, int segmentIndex)[] ComplexSegments;
+   public readonly KeyValuePair<string, IRouteConstraint>[] Constraints;
+   public readonly int Score;
+
+   public Candidate(
+      Endpoint endpoint,
+      int score,
+      KeyValuePair<string, object>[] slots,
+      (string parameterName, int segmentIndex, int slotIndex)[] captures,
+      in (string parameterName, int segmentIndex, int slotIndex) catchAll,
+      (RoutePatternPathSegment pathSegment, int segmentIndex)[] complexSegments,
+      KeyValuePair<string, IRouteConstraint>[] constraints)
+   {
+      Endpoint = endpoint;
+      Score = score;
+      // ...
+      Flags = CandidateFlags.None;
+      for (var i = 0; i < slots.Length; i++) {
+         if (slots[i].Key != null) {
+            Flags |= CandidateFlags.HasDefaults;
+         }
+         // ...
+         if (catchAll.parameterName != null) {
+            Flags |= CandidateFlags.HasCatchAll;
+         }
+         // ...
+      }
+   }
+   [Flags]
+   public enum CandidateFlags {
+      None = 0,
+      HasDefaults = 1,
+      HasCaptures = 2,
+      HasCatchAll = 4,
+      HasSlots = HasDefaults | HasCaptures | HasCatchAll,
+      HasComplexSegments = 8,
+      HasConstraints = 16,
+   }
+}
+//--------------------Ʌ
+
+//--------------------------------------V
+public abstract class EndpointDataSource {    // provides a collection of Endpoint instances.
+   public abstract IChangeToken GetChangeToken();
+   public abstract IReadOnlyList<Endpoint> Endpoints { get; }
+}
+
+public sealed class DefaultEndpointDataSource : EndpointDataSource {  
+
+   private readonly IReadOnlyList<Endpoint> _endpoints;
+
+   public DefaultEndpointDataSource(IEnumerable<Endpoint> endpoints) {
+      _endpoints = new List<Endpoint>(endpoints);
+   }
+   // public override IChangeToken GetChangeToken() => NullChangeToken.Singleton;
+   public override IReadOnlyList<Endpoint> Endpoints => _endpoints;
+}
+
+public sealed class CompositeEndpointDataSource : EndpointDataSource {   // represents a collection of EndpointDataSource
+                                                                         // too complicated, don't worry about it atm
+   // private readonly object _lock;
+   // private IChangeToken _consumerChangeToken;
+   private CancellationTokenSource _cts;
+   private readonly ICollection<EndpointDataSource> _dataSources = default!;
+   private IReadOnlyList<Endpoint> _endpoints = default!;
+   
+   public CompositeEndpointDataSource(IEnumerable<EndpointDataSource> endpointDataSources) : this() {
+      _dataSources = new List<EndpointDataSource>();
+      foreach (var dataSource in endpointDataSources) {
+         _dataSources.Add(dataSource);
+      }
+   }
+
+   public IEnumerable<EndpointDataSource> DataSources => _dataSources;
+} 
+
+//-------------------------------------V
+internal class ModelEndpointDataSource : EndpointDataSource {  // <----------s1
+
+   private readonly List<DefaultEndpointConventionBuilder> _endpointConventionBuilders;
+
+   public ModelEndpointDataSource() {
+      _endpointConventionBuilders = new List<DefaultEndpointConventionBuilder>();
+   }
+
+   public IEndpointConventionBuilder AddEndpointBuilder(EndpointBuilder endpointBuilder) {
+      var builder = new DefaultEndpointConventionBuilder(endpointBuilder);  // <---------------b6.2
+      _endpointConventionBuilders.Add(builder);
+
+      return builder;
+   }
+
+   public override IReadOnlyList<Endpoint> Endpoints => _endpointConventionBuilders.Select(e => e.Build()).ToArray();
+}
+//-------------------------------------Ʌ
+//--------------------V
+public class Endpoint {  // namespace Microsoft.AspNetCore.Http;
+    public Endpoint(RequestDelegate? requestDelegate, EndpointMetadataCollection? metadata, string? displayName) {
+       //...
+    }
+    public string? DisplayName { get; }
+    public EndpointMetadataCollection Metadata { get; }
+    public RequestDelegate? RequestDelegate { get; }
+    public override string? ToString() => DisplayName ?? base.ToString();
+}
+
+public sealed class RouteEndpoint : Endpoint {  // namespace Microsoft.AspNetCore.Routing;
+   public RouteEndpoint(RequestDelegate requestDelegate, RoutePattern routePattern, int order, 
+                        EndpointMetadataCollection? metadata, string? displayName) : base(requestDelegate, metadata, displayName)
+   {
+      RoutePattern = routePattern;
+      Order = order;
+   }
+
+   public int Order { get; }
+   public RoutePattern RoutePattern { get; }
+}
+//-------------------Ʌ
+
+//------------------------------------V
+public interface IEndpointRouteBuilder {    // this has no Build() method
+   IApplicationBuilder CreateApplicationBuilder();
+   IServiceProvider ServiceProvider { get; }
+   ICollection<EndpointDataSource> DataSources { get; }  // this property stores a collection of ModelEndpointDataSource  <----------s1
+}
+
+internal class DefaultEndpointRouteBuilder : IEndpointRouteBuilder {
+   public DefaultEndpointRouteBuilder(IApplicationBuilder applicationBuilder) {
+      ApplicationBuilder = applicationBuilder;
+      DataSources = new List<EndpointDataSource>();
+   }
+
+   public IApplicationBuilder ApplicationBuilder { get; }
+
+   public IApplicationBuilder CreateApplicationBuilder() 
+   {
+      ApplicationBuilder.New();
+   }
+   public ICollection<EndpointDataSource> DataSources { get; }   
+
+   public IServiceProvider ServiceProvider => ApplicationBuilder.ApplicationServices;
+}
+//-------------------Ʌ
+```
+```C#
+//-----------------------------------------------------------------------------------------------------------------------------------------
+public static class EndpointRouteBuilderExtensions {   // namespace Microsoft.AspNetCore.Builder;
+   private static readonly string[] GetVerb = new[] { HttpMethods.Get };
+   private static readonly string[] PostVerb = new[] { HttpMethods.Post };
+   ...
+   private static readonly string[] PatchVerb = new[] { HttpMethods.Patch };
+
+   public static IEndpointConventionBuilder MapGet(this IEndpointRouteBuilder endpoints, string pattern, RequestDelegate requestDelegate) {
+      return MapMethods(endpoints, pattern, GetVerb, requestDelegate);   // <----------------b3
+   }
+
+   public static IEndpointConventionBuilder MapPost(this IEndpointRouteBuilder endpoints, string pattern, RequestDelegate requestDelegate) {
+      return MapMethods(endpoints, pattern, PutVerb, requestDelegate);
+   }
+   ...
+   //  routes requests made with one of the specified HTTP methods (represented as IEnumerable<string>) that match the URL pattern to the endpoint.
+   public static IEndpointConventionBuilder MapMethods(this IEndpointRouteBuilder endpoints, string pattern, IEnumerable<string> httpMethods, RequestDelegate handler) {
+      // ...
+      IEndpointConventionBuilder builder = endpoints.Map(RoutePatternFactory.Parse(pattern), requestDelegate);   // <----------------b3!
+      // Prepends the HTTP method to the DisplayName produced with pattern + method name
+      builder.WithDisplayName($"{pattern} HTTP: {string.Join(", ", httpMethods)}");       // <--------------b7.1
+      builder.WithMetadata(new HttpMethodMetadata(httpMethods));                          // <--------------b7.2
+      return builder;
+   }
+
+   // Adds a RouteEndpoint to the IEndpointRouteBuilder that matches HTTP requests for the specified pattern.
+   public static IEndpointConventionBuilder Map(this IEndpointRouteBuilder endpoints, RoutePattern pattern, RequestDelegate requestDelegate) {  // <-------b4
+      
+      const int defaultOrder = 0;
+
+      var builder = new RouteEndpointBuilder(requestDelegate, pattern, defaultOrder) {  // <--------------b4
+         DisplayName = pattern.RawText
+      }
+
+      // Add delegate attributes as metadata
+      var attributes = requestDelegate.Method.GetCustomAttributes();
+
+      foreach (var attribute in attributes) {
+         builder.Metadata.Add(attribute);
+      }
+
+      var dataSource = endpoints.DataSources.OfType<ModelEndpointDataSource>().FirstOrDefault();
+      if (dataSource == null) {
+         dataSource = new ModelEndpointDataSource();
+         endpoints.DataSources.Add(dataSource);   // <------------------b5
+      }
+
+      return dataSource.AddEndpointBuilder(builder);  // <--------------b6.1
+   }
+   // ...
+}
+
+//-----------------V
+public static class RoutingEndpointConventionBuilderExtensions {  
+   
+   // the purpose of these extension method is to add a Action delegate to the DefaultEndpointConventionBuilder._conventions (List<Action<EndpointBuilder>>) 
+   // which can control the EndpointBuilder later
+
+   public static TBuilder WithDisplayName<TBuilder>(this TBuilder builder, string displayName) where TBuilder : IEndpointConventionBuilder {
+      builder.Add(b => {
+         b.DisplayName = displayName;
+      });
+   }
+   
+   public static TBuilder WithMetadata<TBuilder>(this TBuilder builder, params object[] items) where TBuilder : IEndpointConventionBuilder {
+      builder.Add(b => 
+      {
+         foreach (var item in items) {
+            b.Metadata.Add(item);
+         }
+      });
+   }
+   // ...
+}
+//-----------------Ʌ
+```
+```C#
+//--------------------------------------V
+public abstract class EndpointBuilder {   // a base class for building an new Endpoint
+
+   public RequestDelegate? RequestDelegate { get; set; }
+
+   public string? DisplayName { get; set; }
+
+   public IList<object> Metadata { get; } = new List<object>();
+   
+   public abstract Endpoint Build();
+}
+
+public sealed class RouteEndpointBuilder : EndpointBuilder {
+   public RoutePattern RoutePattern { get; set; }
+   public int Order { get; set; }
+
+   public RouteEndpointBuilder(RequestDelegate requestDelegate, RoutePattern routePattern, int order) {
+      // ...
+   }
+
+   public override Endpoint Build() {
+      RouteEndpoint routeEndpoint = new RouteEndpoint(RequestDelegate, RoutePattern, Order, new EndpointMetadataCollection(Metadata), DisplayName);
+      return routeEndpoint;
+   }
+}
+//--------------------------------------Ʌ
+
+//-------------------V
+public class Endpoint {
+    public Endpoint(RequestDelegate? requestDelegate, EndpointMetadataCollection? metadata, string? displayName) {
+       // ...
+    }
+    public string? DisplayName { get; }
+    public EndpointMetadataCollection Metadata { get; }
+    public RequestDelegate? RequestDelegate { get; }
+    public override string? ToString() => DisplayName ?? base.ToString();
+}
+
+public sealed class RouteEndpoint : Endpoint {
+   // ... same as Endpoint except two things below
+   public int Order { get; }
+   public RoutePattern RoutePattern { get; }
+}
+//-------------------Ʌ
+
+//-----------------------------------------V
+public interface IEndpointConventionBuilder 
+{ 
+   void Add(Action<EndpointBuilder> convention);
+}
+
+internal class DefaultEndpointConventionBuilder : IEndpointConventionBuilder {   
+   
+   internal EndpointBuilder EndpointBuilder { get; }
+
+   private List<Action<EndpointBuilder>>? _conventions;
+
+   public DefaultEndpointConventionBuilder(EndpointBuilder endpointBuilder) {
+      EndpointBuilder = endpointBuilder;
+      _conventions = new();
+   }
+
+   public void Add(Action<EndpointBuilder> convention) {
+       _conventions.Add(convention);
+   }
+
+   public Endpoint Build() {
+      // ... Interlocked.Exchange() thing to make sure convention only apply once
+
+      if (conventions is not null) {
+         foreach (var convention in conventions) 
+         {
+            convention(EndpointBuilder);
+         }
+      }
+
+      return EndpointBuilder.Build();
+   }
+}
+//-----------------------------------------Ʌ
+
+// metadata used during link generation to find the associated endpoint using route name
+public sealed class RouteNameMetadata : IRouteNameMetadata {
+   public RouteNameMetadata(string? routeName) {
+      RouteName = routeName;
+   }
+
+   public string? RouteName { get; }
+}
+
+public static class RoutingEndpointConventionBuilderExtensions {
+   public static TBuilder WithMetadata<TBuilder>(this TBuilder builder, params object[] items) where TBuilder : IEndpointConventionBuilder {
+      builder.Add(b => {
+         foreach (var item in items) {
+            b.Metadata.Add(item);
+         }
+      });
+   }
+}
+
+
+//-------------------V
+public interface IParameterPolicy { }  // a marker interface for types that are associated with route parameters
+
+public interface IRouteConstraint : IParameterPolicy {
+   bool Match(HttpContext httpContext, IRouter route, string routeKey, RouteValueDictionary values, RouteDirection routeDirection);
+}
+//-------------------Ʌ
+```
+```C#
+//---------------------------V
+internal sealed partial class EndpointMiddleware   // this middleware is quite simple, just executes the chosen endpoint
+{
+   internal const string AuthorizationMiddlewareInvokedKey = "__AuthorizationMiddlewareWithEndpointInvoked";
+   internal const string CorsMiddlewareInvokedKey = "__CorsMiddlewareWithEndpointInvoked";
+
+   private readonly ILogger _logger;
+   private readonly RequestDelegate _next;
+   private readonly RouteOptions _routeOptions;
+
+   public EndpointMiddleware(ILogger<EndpointMiddleware> logger, RequestDelegate next, IOptions<RouteOptions> routeOptions) 
+   {
+      // ...
+   }
+
+   public Task Invoke(HttpContext httpContext) 
+   {
+      var endpoint = httpContext.GetEndpoint();
+      if (endpoint?.RequestDelegate != null) 
+      {
+         if (!_routeOptions.SuppressCheckForUnhandledSecurityMetadata)
+         {
+            if (endpoint.Metadata.GetMetadata<IAuthorizeData>() != null && !httpContext.Items.ContainsKey(AuthorizationMiddlewareInvokedKey)) {
+               ThrowMissingAuthMiddlewareException(endpoint);
+            }
+
+            if (endpoint.Metadata.GetMetadata<ICorsMetadata>() != null && !httpContext.Items.ContainsKey(CorsMiddlewareInvokedKey)) {
+               ThrowMissingCorsMiddlewareException(endpoint);
+            }
+         }
+
+         Log.ExecutingEndpoint(_logger, endpoint);
+
+         try {
+            var requestTask = endpoint.RequestDelegate(httpContext);     // execute endpoint's delegate
+            if (!requestTask.IsCompletedSuccessfully) {
+               return AwaitRequestTask(endpoint, requestTask, _logger);  // if endpoint found and executed successfully, return immediately, 
+                                                                         // therefore short circuit the rest of middlewares
+            }
+         }
+         catch (Exception exception) {
+            Log.ExecutedEndpoint(_logger, endpoint);
+            return Task.FromException(exception);
+         }
+
+         Log.ExecutedEndpoint(_logger, endpoint);
+         return Task.CompletedTask;  // <------------
+      }                                           //| <----------- now you see why if there is a matched endpoint, then 'outer' middleware will be ignored,
+                                                  //|              there is what the 'end' in 'endpoint' is all ablout
+      return _next(httpContext);     // <------------    
+   }
+}
+//---------------------------Ʌ
 ```
 
+-------------------------------------------------------------------------------------------------------------------------------
+Let's put endpoint register in dissection:
 
+```C#
+public class Startup 
+{
+   public void ConfigureServices(IServiceCollection services) { }
+
+   public void Configure(IApplicationBuilder app, IWebHostEnvironment env) {
+      // ......
+      app.UseRouting();  
+
+      app.UseEndpoints(endpoints =>   // endpoints is IEndpointRouteBuilder
+      {  
+         endpoints.Map("{number:int}", async context => {     // <----------------------------------------- we will look at this one
+            await context.Response.WriteAsync("Routed to the int endpoint");
+         })
+         .WithDisplayName("Int Endpoint")                 
+         .Add(b => ((RouteEndpointBuilder)b).Order = 1); 
+
+         endpoints.Map("{number:double}", async context => {
+            await context.Response.WriteAsync("Routed to the double endpoint");
+         })
+         .WithDisplayName("Double Endpoint")                 
+         .Add(b => ((RouteEndpointBuilder)b).Order = 2);
+      });
+   }
+}
+
+public static class EndpointRoutingApplicationBuilderExtensions 
+{
+   public static IApplicationBuilder UseEndpoints(this IApplicationBuilder builder, Action<IEndpointRouteBuilder> configure) 
+   {   
+      // step 1
+      VerifyEndpointRoutingMiddlewareIsRegistered(builder, out var endpointRouteBuilder);   // call !app.Properties.TryGetValue(EndpointRouteBuilder, out var obj) internally
+      
+      // step 2
+      configure(endpointRouteBuilder); 
+
+      // this part is complicated and related to discovery of endpoints or URL generation, don't worry about it
+      var routeOptions = builder.ApplicationServices.GetRequiredService<IOptions<RouteOptions>>();
+      foreach (var dataSource in endpointRouteBuilder.DataSources) {   
+         if (!routeOptions.Value.EndpointDataSources.Contains(dataSource)) {
+            routeOptions.Value.EndpointDataSources.Add(dataSource);   
+         }
+      }
+      //
+      
+      // step 3
+      return builder.UseMiddleware<EndpointMiddleware>();  
+   }
+}
+```
+
+1.  `UseEndpoints` extension method is called, `IEndpointRouteBuilder`(`DefaultEndpointRouteBuilder`) instance is retrieved from `ApplicationBuilder.Properties`
+
+```C#
+public interface IApplicationBuilder {   
+   IServiceProvider ApplicationServices { get; set; }
+   IFeatureCollection ServerFeatures { get; }
+   IDictionary<string, object?> Properties { get; }  // <-----------------------------------------
+   IApplicationBuilder Use(Func<RequestDelegate, RequestDelegate> middleware);
+   IApplicationBuilder New();
+   RequestDelegate Build();
+}
+```
+
+2. `endpoints.Map("{number:int}", ...)` is invoke where `endpoints` is `DefaultEndpointRouteBuilder`, so `Map()` extension method is called on it:
+   **2.1a**: `RoutePatternParser` (via `RoutePatternFactory`) first parses the "{number:int}" string into a `RoutePattern` which contains some `IReadOnlyDictionary` of
+          defaults, requiredValues, parameters, for example, you can do
+   ```C#
+   RoutePattern pattern = RoutePatternFactory.Parse("{controller=Home}/{action=Index}/{id?}");
+
+   public sealed class RoutePattern
+   {
+      /*
+      key: controller, value: Home
+      key: action, value: Index
+      */
+      IReadOnlyDictionary<string, object?> defaults;
+
+      // 3 RoutePatternParameterPart instances
+      IReadOnlyList<RoutePatternParameterPart> parameters;
+      // ...
+   }
+   ```
+   
+```C#
+public static class EndpointRouteBuilderExtensions
+{
+   public static IEndpointConventionBuilder MapGet(this IEndpointRouteBuilder endpoints, string pattern, RequestDelegate requestDelegate)
+   {
+      return MapMethods(endpoints, pattern, GetVerb, requestDelegate);
+   }
+
+   public static IEndpointConventionBuilder MapMethods(this IEndpointRouteBuilder endpoints, string pattern, IEnumerable<string> httpMethods, RequestDelegate handler)
+   {
+      // step 2.1a                                   // RoutePatternFactory creates RoutePattern (via RoutePatternParser whose job is to analyse "{number:int}" string )
+      IEndpointConventionBuilder builder = endpoints.Map(RoutePatternFactory.Parse(pattern), requestDelegate);  
+
+      builder.WithDisplayName($"{pattern} HTTP: {string.Join(", ", httpMethods)}"); 
+      
+      builder.WithMetadata(new HttpMethodMetadata(httpMethods));
+      
+      return builder;
+   }
+
+   // step 2.1b
+   public static IEndpointConventionBuilder Map(this IEndpointRouteBuilder endpoints, RoutePattern pattern, RequestDelegate requestDelegate) 
+   {  
+      const int defaultOrder = 0;
+
+      var builder = new RouteEndpointBuilder(requestDelegate, pattern, defaultOrder) {   // associate the user defined delegate to RouteEndpointBuilder, when Build() method called
+         DisplayName = pattern.RawText                                                   // it returns the Endpoint that has the delegate. Now you see how your RequestDelegate
+      }                                                                                  // is attached to the Endpoint
+
+      var attributes = requestDelegate.Method.GetCustomAttributes();
+
+      foreach (var attribute in attributes) {
+         builder.Metadata.Add(attribute);
+      }
+
+      var dataSource = endpoints.DataSources.OfType<ModelEndpointDataSource>().FirstOrDefault();
+      if (dataSource == null) {
+         dataSource = new ModelEndpointDataSource();
+         endpoints.DataSources.Add(dataSource);  
+      }
+
+      return dataSource.AddEndpointBuilder(builder); 
+   }
+}
+```
+
+3. `EndpointMiddleware` will execute the Endpointer that matched and set by `EndpointRoutingMiddleware`. 
+----------------------------------------------------------------------------------------------------------------
+
+```C#
+public class RouteOptions   // represent the configurable options on a route.
+{
+   private IDictionary<string, Type> _constraintTypeMap = GetDefaultConstraintMap();
+   private ICollection<EndpointDataSource> _endpointDataSources = default!;
+
+   internal ICollection<EndpointDataSource> EndpointDataSources {
+      get {
+         Debug.Assert(_endpointDataSources != null, "Endpoint data sources should have been set in DI.");
+         return _endpointDataSources;
+      }
+      set => _endpointDataSources = value;
+   }
+
+   public bool LowercaseUrls { get; set; }
+   public bool LowercaseQueryStrings { get; set; }
+   public bool AppendTrailingSlash { get; set; }
+   public bool SuppressCheckForUnhandledSecurityMetadata { get; set; }
+   public IDictionary<string, Type> ConstraintMap { get; set; }
+
+   private static IDictionary<string, Type> GetDefaultConstraintMap()  // <------------------------------c2
+   {
+      var defaults = new Dictionary<string, Type>(StringComparer.OrdinalIgnoreCase);
+
+      // Type-specific constraints
+      AddConstraint<IntRouteConstraint>(defaults, "int");
+      AddConstraint<BoolRouteConstraint>(defaults, "bool");
+      AddConstraint<DateTimeRouteConstraint>(defaults, "datetime");
+      // ...
+
+      // Length constraints
+      AddConstraint<MinLengthRouteConstraint>(defaults, "minlength");
+      AddConstraint<MaxLengthRouteConstraint>(defaults, "maxlength");
+      AddConstraint<LengthRouteConstraint>(defaults, "length");
+
+      // Min/Max value constraints
+      AddConstraint<MinRouteConstraint>(defaults, "min");
+      AddConstraint<MaxRouteConstraint>(defaults, "max");
+      AddConstraint<RangeRouteConstraint>(defaults, "range");
+
+      // ... Regex-based constraints and other
+
+      return defaults;
+   }
+
+   private static void AddConstraint<TConstraint>(Dictionary<string, Type> constraintMap, string text) where TConstraint : IRouteConstraint
+   {
+      constraintMap[text] = typeof(TConstraint);
+   }
+   // ... SetParameterPolicy related
+}
+
+public static class RoutePatternFactory {   // namespace Microsoft.AspNetCore.Routing.Patterns;
+   ...
+   public static RoutePattern Parse(string pattern) {
+      return RoutePatternParser.Parse(pattern);
+   }
+}
+
+internal static class RoutePatternParser {
+   private const char Separator = '/';
+   private const char OpenBrace = '{';
+   private const char CloseBrace = '}';
+   private const char QuestionMark = '?';
+   private const char Asterisk = '*';  
+   private const string PeriodString = ".";
+
+   internal static readonly char[] InvalidParameterNameChars = new char[] {  Separator, OpenBrace, CloseBrace, QuestionMark, Asterisk };
+
+   public static RoutePattern Parse(string pattern) {
+      var trimmedPattern = TrimPrefix(pattern);
+   }
+
+   private static string TrimPrefix(string routePattern) {
+      if (routePattern.StartsWith("~/", StringComparison.Ordinal)) {
+         return routePattern.Substring(2);
+      } else if (routePattern.StartsWith("/", StringComparison.Ordinal)) {
+         return routePattern.Substring(1);
+      } else if (routePattern.StartsWith("~", StringComparison.Ordinal)) {
+         throw new RoutePatternException(routePattern, Resources.TemplateRoute_InvalidRouteTemplate);
+      }
+      return routePattern;  
+   }
+   // ...
+}
+
+public sealed class RoutePattern {
+   public static readonly object RequiredValueAny = new RequiredValueAnySentinal();
+
+   internal static bool IsRequiredValueAny(object? value) {
+      return object.ReferenceEquals(RequiredValueAny, value);
+   }
+
+   private const string SeparatorString = "/";
+
+   internal RoutePattern(
+      string? rawText, 
+      IReadOnlyDictionary<string, object?> defaults,
+      IReadOnlyDictionary<string, IReadOnlyList<RoutePatternParameterPolicyReference>> parameterPolicies,
+      IReadOnlyDictionary<string, object?> requiredValues,
+      IReadOnlyList<RoutePatternParameterPart> parameters,
+      IReadOnlyList<RoutePatternPathSegment> pathSegments)
+   {
+      // ...
+   }
+
+   // Route Template: "{controller=Home}/{action=Index}/{id?}"
+   // Route Values: { controller = "Store", action = "Index" }
+   public IReadOnlyDictionary<string, object?> RequiredValues { get; }
+
+   public IReadOnlyDictionary<string, object?> Defaults { get; }
+   // ...
+}
+```
+
+After reading source code, let's answer one important question, when does the `HttpRequest.RouteValues` get populated with Key/Value pairs? 
+
+```C#
+public class Startup 
+{
+   public void ConfigureServices(IServiceCollection services) { }
+
+   public void Configure(IApplicationBuilder app, IWebHostEnvironment env) 
+   {
+      app.UseMiddleware<TestMiddleware>();   // `HttpRequest.RouteValues` doesn't have Key/Value pairs
+
+      app.UseRouting();  
+
+      app.UseMiddleware<TestMiddleware>();   // `HttpRequest.RouteValues` have Key/Value pairs, first, second, third as Key
+
+      endpoints.MapGet("{first}/{second}/{third}", async context =>
+      {
+         await context.Response.WriteAsync("Request Was Routed\n");
+
+         foreach (var kvp in context.Request.RouteValues)
+         {
+            await context.Response.WriteAsync($"{kvp.Key}: {kvp.Value}\n");
+         }
+      });
+   }
+}
+```
+
+So we know `HttpRequest.RouteValues` must be populated with Key/Value pairs in `UseRouting()`. I think it happens in `EndpointRoutingMiddleware`
+
+```C#
+internal sealed partial class EndpointRoutingMiddleware 
+{   
+   // ...
+   public Task Invoke(HttpContext httpContext) 
+   {
+      // ...
+      var matcher = _matcherFactory.CreateMatcher(_endpointDataSource);   
+      await matcher.MatchAsync(httpContext);   // <--------------------------------- must be here
+      // ...   
+   }
+}
+```
+
+## HttpContext Code
+
+```C#
+public abstract class HttpContext {   // namespace Microsoft.AspNetCore.Http
+   ...
+   public abstract HttpRequest Request { get; }
+   public abstract HttpResponse Response { get; }
+   public abstract ConnectionInfo Connection { get; }
+   public abstract ISession Session { get; set; }
+   public abstract void Abort();
+
+   public abstract ClaimsPrincipal User { get; set; }
+
+   public abstract IFeatureCollection Features { get; }   // allow access to the low-level aspects of request handling
+
+   public abstract IDictionary<object, object> Items { get; set; }  // gets or sets a key/value collection that shares data within the scope of this request.
+
+   public abstract IServiceProvider RequestServices { get; set; }   // gets or sets the IServiceProvider that can access to the request's service container.
+}
+
+public abstract class HttpRequest {
+   ...
+   public abstract Stream Body { get; set; }
+   public abstract string ContentType { get; set; }
+   public abstract long? ContentLength { get; set; }
+   public abstract IRequestCookieCollection Cookies { get; set; }
+   public abstract IFormCollection Form { get; set; }
+   public abstract IHeaderDictionary Headers { get; }
+   public abstract bool IsHttps { get; set; }
+   public abstract string Method { get; set; }
+   public abstract PathString Path { get; set; }
+   public abstract IQueryCollection Query { get; set; }
+   public virtual RouteValueDictionary RouteValues { get; set; }
+   
+   public abstract HttpContext HttpContext { get; }
+}
+
+public abstract class HttpResponse {
+   public abstract long? ContentLength { get; set; }
+   public abstract string ContentType { get; set; }
+   public abstract IResponseCookies Cookies { get; }
+   public abstract bool HasStarted { get; }
+   public abstract IHeaderDictionary Headers { get; }
+   public abstract int StatusCode { get; set; }
+   public virtual void Redirect(string location);
+
+   public abstract HttpContext HttpContext { get; }
+}
+
+public readonly struct PathString : IEquatable<PathString> {
+   internal const int StackAllocThreshold = 128;
+   public static readonly PathString Empty = new(string.Empty);
+   
+   public PathString(string? value) {
+      if (!string.IsNullOrEmpty(value) && value[0] != '/') {
+         throw new ArgumentException(Resources.FormatException_PathMustStartWithSlash(nameof(value)), nameof(value));
+      }
+      Value = value;
+   }
+
+   public string? Value { get; }   // this is used to check equality
+   ...
+}
+
+public static class HttpResponseWritingExtensions {
+   public static Task WriteAsync(this HttpResponse response, string text, Encoding encoding, CancellationToken cancellationToken = default) {
+      ...
+      return response.Body.WriteAsync(data, 0, data.Length, cancellationToken);
+   }
+}
+```
+
+## DI Code
+```C#
+public static class RoutingServiceCollectionExtensions {
+   // ...
+   public static IServiceCollection AddRouting(this IServiceCollection services) {
+      // ...
+      services.TryAddSingleton(typeof(RoutingMarkerService));
+      // ...
+      services.TryAddSingleton<LinkGenerator, DefaultLinkGenerator>();
+   }
+}
+
+// a marker class used to determine if all the routing services were added
+internal class RoutingMarkerService {
+
+}
+```
+
+## Other Details
+```C#
+// exampleA, throws an exception because there is no matching UseRouting and UseEndpoints
+public void Configure(IApplicationBuilder app, IWebHostEnvironment env) {
+
+   app.UseRouting();
+
+   app.Map("/branch", branchApp => {
+      branchApp.UseEndpoints(endpoints => {   // no matching UseRouting()
+         // ...
+      });
+   });
+
+   app.UseEndpoints(endpoints => {
+      // ...
+   });
+}
+```
+
+## Chapter13 Content
+
+#### Generating URLs from Routes
+
+```C#
+public class Population {
+   public static async Task Endpoint(HttpContext context) {
+      string city = context.Request.RouteValues["city"] as string ?? "london";
+      int? pop = null;
+      switch (city?.ToLower()) {
+         case "london":
+            pop = 8_136_000;
+            break;
+         case "paris":
+            pop = 2_141_000;
+            break;
+         case "monaco":
+            pop = 39_000;
+            break;
+      }
+      if (pop.HasValue) {
+         await context.Response .WriteAsync($"City: {city}, Population: {pop}");
+      } else {
+         context.Response.StatusCode = StatusCodes.Status404NotFound;
+      }
+   }
+}
+```
+```C#
+public static class Capital {
+   public static async Task Endpoint(HttpContext context) {
+      string capital = null;
+      string country = context.Request.RouteValues["country"] as string;
+      switch ((country ?? "").ToLower()) {
+         case "uk":
+            capital = "London";
+            break;
+         case "france":
+            capital = "Paris";
+            break;
+         case "monaco":
+            LinkGenerator generator = context.RequestServices.GetService<LinkGenerator>();
+
+            // you might wonder why HttContext object is needed, what about constraints?
+            string url = generator.GetPathByRouteValues(context, "population", new { city = country });  // case doesn't matter, it can be new { City = country }
+            
+            // if you use context.Response.Redirect("population/monaco") there will be a hard dependency on the /population url
+            // what if the routing pattern changed from "population/{city}" to "size/{city}" in c1
+            // you get tbe idea :) but you still need to match the route parameter name (city)
+            context.Response.Redirect(url);
+            return;
+      }
+      if (capital != null) {
+         await context.Response
+         .WriteAsync($"{capital} is the capital of {country}");
+      } else {
+         context.Response.StatusCode = StatusCodes.Status404NotFound;
+      }
+   }
+}
+```
+```C#
+public class Startup {
+   public void ConfigureServices(IServiceCollection services) { }
+
+   public void Configure(IApplicationBuilder app, IWebHostEnvironment env, IOptions<MessageOptions> msgOptions) {   
+      app.UseRouting();
+      app.UseEndpoints(endpoints => {
+         endpoints.MapGet("capital/{country}", Capital.Endpoint);
+         endpoints.MapGet("population/{city}", Population.Endpoint).WithMetadata(new RouteNameMetadata("population"));
+         // endpoints.MapGet("size/{city}", Population.Endpoint).WithMetadata(new RouteNameMetadata("population"));   <--------c1
+      });
+   }
+}
+```
+
+## Using Default, Optional, Catchall for Segment Variables and Fallback Routes
+
+```C#
+public class Startup {
+   public void ConfigureServices(IServiceCollection services) { }
+
+   public void Configure(IApplicationBuilder app, IWebHostEnvironment env, IOptions<MessageOptions> msgOptions) {   
+      app.UseRouting();
+      app.UseEndpoints(endpoints => {
+         
+         endpoints.MapGet("capital/{country=France}", Capital.Endpoint);  // default
+
+         endpoints.MapGet("size/{city?}", Population.Endpoint)            // optional 
+
+         endpoints.MapGet("{first}/{second}/{*catchall}", async context => {
+            foreach (var kvp in context.Request.RouteValues) {
+               await context.Response.WriteAsync($"{kvp.Key}: {kvp.Value}\n");
+            }
+            // if url is http://localhost:5000/one/two/three/four
+            // then first = "one"; second = "two"; catchall = "three/four"
+         });
+
+         endpoints.MapFallback(async context => {   // used as a last resort and that will match any request if no endpoint is matched
+            await context.Response.WriteAsync("Routed to fallback endpoint");
+         });
+      });
+   }
+}
+```
+
+## Using Constraints and Creating Custom Constraints
+
+```C#
+public class CountryRouteConstraint : IRouteConstraint {
+   private static string[] countries = { "uk", "france", "monaco" };
+   public bool Match(HttpContext httpContext, IRouter route, string routeKey, RouteValueDictionary values, RouteDirection routeDirection) {
+      string segmentValue = values[routeKey] as string ?? "";
+      return Array.IndexOf(countries, segmentValue.ToLower()) > -1;
+   }
+}
+
+public class Startup {
+   public void ConfigureServices(IServiceCollection services) {
+      services.Configure<RouteOptions>(opts => {
+         opts.ConstraintMap.Add("countryName",typeof(CountryRouteConstraint));
+      });
+   }
+
+   public void Configure(IApplicationBuilder app, IWebHostEnvironment env, IOptions<MessageOptions> msgOptions) {   
+      app.UseRouting();
+      app.UseEndpoints(endpoints => {     
+         endpoints.MapGet("{first:alpha:length(3)}/{second:bool}", async context => {  // system built-in constraints, see c2
+            await context.Response.WriteAsync("Request Was Routed\n");
+            foreach (var kvp in context.Request.RouteValues) {
+               await context.Response.WriteAsync($"{kvp.Key}: {kvp.Value}\n");
+            }
+         });   
+         endpoints.MapGet("capital/{country:countryName}", Capital.Endpoint); // or you can use regex as below:
+         endpoints.MapGet("capital/{country:regex(^uk|france|monaco$)}", Capital.Endpoint);
+      });
+   }
+}
+```
+
+## Avoiding Ambiguous Route Exceptions
+
+```C#
+// if the routing system can't choose between them and throws an exception if don't specific Order and default order is 0
+//  Precedence is given to the route with the lowest Order value
+public class Startup {
+   // ...
+   public void Configure(IApplicationBuilder app, IWebHostEnvironment env, IOptions<MessageOptions> msgOptions) {   
+      app.UseRouting();
+      
+      app.UseEndpoints(endpoints => {              
+         endpoints.MapGet("{number:int}", , async context => {
+            await context.Response.WriteAsync("Routed to the int endpoint");
+         }).Add(b => ((RouteEndpointBuilder)b).Order = 1);  // check DefaultEndpointConventionBuilder you will understand this awkward pattern
+         
+         endpoints.MapGet("{number:double}", , async context => {
+            await context.Response.WriteAsync("Routed to the double endpoint");
+         }).Add(b => ((RouteEndpointBuilder)b).Order = 2); 
+      });
+   }
+}
+```
+
+## Accessing the Endpoint in a Middleware Component
+
+In early of asp.net version, there is one limitation which is a middleware component at the start of the pipline can't tell which of the later components will generate a response. The routing middleware does something different. Although routes are registered in the `UseEndpoints` method, the selection of a route is done in the `UseRouting` method, and the endpoint is executed to generate a response in the UseEndpoints method. Any middleware component that is added to the request pipeline between `UseEndpoints()` and `UseRouting()` can see which endpoint has been selected before the response is generated and alter its behavior accordingly. An example below adds a middleware component that adds different messages to the response based on the route that has been selected to handle the request.
+
+```C#
+public class Startup {
+   // ...
+   public void Configure(IApplicationBuilder app, IWebHostEnvironment env, IOptions<MessageOptions> msgOptions) {   
+      app.UseRouting();
+      //------------------------------------V <-------------middlewares between those two methods know if an endpoint has already been selected will be invoked
+      
+      app.Use(async (context, next) => {
+         Endpoint end = context.GetEndpoint();
+         if (end != null) {
+            await context.Response.WriteAsync($"{end.DisplayName} Selected \n");
+         } else {
+           await context.Response.WriteAsync("No Endpoint Selected \n");
+         }
+         await next();
+      });
+
+      //------------------------------------Ʌ
+      app.UseEndpoints(endpoints => {              
+         endpoints.MapGet("{number:int}", , async context => {
+            await context.Response.WriteAsync("Routed to the int endpoint");
+         }).Add(b => ((RouteEndpointBuilder)b).Order = 1)
+         .WithDisplayName("Int Endpoint");  
+         
+         endpoints.MapGet("{number:double}", , async context => {
+            await context.Response.WriteAsync("Routed to the double endpoint");
+         }).Add(b => ((RouteEndpointBuilder)b).Order = 2)
+         .WithDisplayName("Int Endpoint"); ; 
+      });
+   }
+}
+```
+----------------------------------------------------------------------------------------------
+
+## A Simple Custom Routing System
+
+```C#
+public class Program
+{
+    public static void Main()
+    {
+        Host.CreateDefaultBuilder()
+            .ConfigureWebHostDefaults(builder => builder
+            .ConfigureServices(services => services
+                    .AddRouting()
+                    .AddMvcControllers())
+            .Configure(app => app
+            .UseDeveloperExceptionPage()
+                .UseRouting()
+                .UseEndpoints(endpoints => endpoints.MapMvcControllerRoute("default","{controller}/{action}"))))
+            .Build()
+            .Run();
+    }
+}
+```
+
+```C#
+public static class ServiceCollectionExtensions
+{
+   public static IServiceCollection AddMvcControllers(this IServiceCollection services)
+   {
+      services.AddSingleton<IActionDescriptorCollectionProvider, DefaultActionDescriptorCollectionProvider>();
+      services.AddSingleton<IActionInvokerFactory, ActionInvokerFactory>();
+      services.AddSingleton<IActionDescriptorProvider, ControllerActionDescriptorProvider>();
+      services.AddSingleton<ControllerActionEndpointDataSource, ControllerActionEndpointDataSource>();
+
+      return services;
+   }
+}
+```
+
+```C#
+public static class EndpointRouteBuilderExtensions
+{
+   public static ControllerActionEndpointConventionBuilder MapMvcControllers(this IEndpointRouteBuilder endpointBuilder)
+   {
+      var endpointDatasource = endpointBuilder.ServiceProvider.GetRequiredService<ControllerActionEndpointDataSource>();
+      endpointBuilder.DataSources.Add(endpointDatasource);
+      return endpointDatasource.DefaultBuilder;
+   }
+
+   public static ControllerActionEndpointConventionBuilder MapMvcControllerRoute(this IEndpointRouteBuilder endpointBuilder, string name, string pattern,
+                                                                                 RouteValueDictionary defaults = null, RouteValueDictionary constraints = null,
+                                                                                 RouteValueDictionary dataTokens = null)
+   {
+      var endpointDatasource = endpointBuilder.ServiceProvider.GetRequiredService<ControllerActionEndpointDataSource>();
+      endpointBuilder.DataSources.Add(endpointDatasource);
+      return endpointDatasource.AddRoute(name, pattern, defaults, constraints, dataTokens);
+   }
+}
+```
+
+**Part A**-`ActionDescriptor`
+
+```C#
+//---------------------------V
+public class ActionDescriptor
+{
+   public AttributeRouteInfo AttributeRouteInfo { get; set; }
+   public IDictionary<string, string> RouteValues { get; set; }
+}
+
+public class AttributeRouteInfo
+{
+   public int Order { get; set; }
+   public string Template { get; set; }
+}
+
+public class ControllerActionDescriptor : ActionDescriptor
+{
+   public Type ControllerType { get; set; }
+   public MethodInfo Method { get; set; }
+}
+
+public interface IActionDescriptorProvider
+{
+   IEnumerable<ActionDescriptor> ActionDescriptors { get; }
+}
+//---------------------------Ʌ
+
+//-------------------------------------V
+public interface IRouteTemplateProvider
+{
+   string Name { get; }
+   string Template { get; }
+   int? Order { get; }
+}
+
+public class HttpGetAttribute : HttpMethodAttribute
+{
+   private static readonly IEnumerable<string> _supportedMethods = new[] { "GET" };
+   public HttpGetAttribute() : base (_supportedMethods) { }
+   public HttpGetAttribute(string template) : base(_supportedMethods, template) { }
+}
+
+public abstract class HttpMethodAttribute : Attribute, IRouteTemplateProvider
+{
+   private readonly List<string> _httpMethods;
+   private int _order;
+
+   public HttpMethodAttribute(IEnumerable<string> httpMethods, string template)
+   {
+      _httpMethods = httpMethods.ToList();
+       Template = template;
+   }
+   
+   public IEnumerable<string> HttpMethods => _httpMethods;
+
+   //
+   public int Order
+   {
+      get { return _order ?? 0; }
+      set { _order = value; }
+   }
+
+   public string Name { get; set; }
+
+   int IRouteTemplateProvider.Order => _order;
+   //
+}
+//-------------------------------------Ʌ
+
+//---------------------------------------------V
+public class ControllerActionDescriptorProvider : IActionDescriptorProvider
+{
+   private readonly Lazy<IEnumerable<ActionDescriptor>> _accessor;
+   public IEnumerable<ActionDescriptor> ActionDescriptors => _accessor.Value;
+   public ControllerActionDescriptorProvider(IHostEnvironment environment)
+   {
+      _accessor = new Lazy<IEnumerable<ActionDescriptor>>(() => GetActionDescriptors(environment.ApplicationName));
+   }
+
+   private IEnumerable<ActionDescriptor> GetActionDescriptors(string applicationName)
+   {
+      var assemblyName = new AssemblyName(applicationName);
+
+      var assembly = Assembly.Load(assemblyName);
+
+      foreach (var type in assembly.GetExportedTypes())
+      {
+         if (type.Name.EndsWith("Controller"))
+         {
+            string controllerName = type.Name.Substring(0, type.Name.Length - "Controller".Length);
+            foreach (var method in type.GetMethods())
+            {
+               yield return CreateActionDescriptor(method, type, controllerName);
+            }
+         }
+      }
+   }
+
+   private ControllerActionDescriptor CreateActionDescriptor(MethodInfo method, Type controllerType, string controllerName)
+   {
+      var actionName = method.Name;
+
+      if (actionName.EndsWith("Async"))
+      {
+         actionName = actionName.Substring(0, actionName.Length - "Async".Length);
+      }
+
+      IRouteTemplateProvider templateProvider = method.GetCustomAttributes().OfType<IRouteTemplateProvider>().FirstOrDefault();
+
+      if (templateProvider != null)
+      {
+         AttributeRouteInfo routeInfo = new AttributeRouteInfo
+         {
+            Order = templateProvider.Order ?? 0,
+            Template = templateProvider.Template
+         };
+
+         return new ControllerActionDescriptor
+         {
+            AttributeRouteInfo = routeInfo,
+            ControllerType = controllerType,
+            Method = method
+         };
+      }
+
+      return new ControllerActionDescriptor
+      {
+         ControllerType = controllerType,
+         Method = method,
+         RouteValues = new Dictionary<string, string>
+         {
+            ["controller"] = controllerName,
+            ["action"] = actionName
+         }
+      };
+   }
+}
+
+public interface IActionDescriptorCollectionProvider
+{
+   IReadOnlyList<ActionDescriptor> ActionDescriptors { get; }
+}
+
+public class DefaultActionDescriptorCollectionProvider : IActionDescriptorCollectionProvider   // ControllerActionDescriptorProvider is for convention routing, this 
+{                                                                                              // CollectionProvider is both for convention and attribute routing
+   private readonly Lazy<IReadOnlyList<ActionDescriptor>> _accessor;
+   public IReadOnlyList<ActionDescriptor> ActionDescriptors => _accessor.Value;
+
+   public DefaultActionDescriptorCollectionProvider(IEnumerable<IActionDescriptorProvider> providers)
+   {
+      _accessor = new Lazy<IReadOnlyList<ActionDescriptor>>(() => providers.SelectMany(it => it.ActionDescriptors).ToList());
+   }
+}
+//---------------------------------------------Ʌ
+```
+
+**Part B**
+
+```C#
+public interface IEndpointConventionBuilder 
+{  
+   void Add(Action<EndpointBuilder> convention);
+}
+
+public class ControllerActionEndpointConventionBuilder : IEndpointConventionBuilder
+{
+    private readonly List<Action<EndpointBuilder>> _conventions;
+
+    public ControllerActionEndpointConventionBuilder(List<Action<EndpointBuilder>> conventions)
+    {
+        _conventions = conventions;
+    }
+
+    public void Add(Action<EndpointBuilder> convention) => _conventions.Add(convention);
+}
+
+//------------------------------------------------V
+public abstract class EndpointDataSource 
+{  
+   public abstract IChangeToken GetChangeToken();
+   public abstract IReadOnlyList<Endpoint> Endpoints { get; }
+   // ...
+}
+
+public abstract class ActionEndpointDataSourceBase : EndpointDataSource
+{
+   private readonly Lazy<IReadOnlyList<Endpoint>> _endpointsAccessor;
+   protected readonly List<Action<EndpointBuilder>> Conventions;
+
+   protected ActionEndpointDataSourceBase(IActionDescriptorCollectionProvider provider)
+   {
+      Conventions = new List<Action<EndpointBuilder>>();
+      _endpointsAccessor = new Lazy<IReadOnlyList<Endpoint>>(() => CreateEndpoints(provider.ActionDescriptors, Conventions));
+   }
+
+   public override IReadOnlyList<Endpoint> Endpoints => _endpointsAccessor.Value;
+   public override IChangeToken GetChangeToken() => NullChangeToken.Instance;
+   protected abstract List<Endpoint> CreateEndpoints(IReadOnlyList<ActionDescriptor> actions, IReadOnlyList<Action<EndpointBuilder>> conventions);
+}
+//------------------------------------------------Ʌ
+
+//---------------------------------------------V
+public class ControllerActionEndpointDataSource : ActionEndpointDataSourceBase
+{
+   private readonly List<ConventionalRouteEntry> _conventionalRoutes;
+   private int _order;
+   private readonly RoutePatternTransformer _routePatternTransformer;
+   private readonly RequestDelegate _requestDelegate;
+   public ControllerActionEndpointConventionBuilder DefaultBuilder { get; }
+
+   public ControllerActionEndpointDataSource(IActionDescriptorCollectionProvider provider, RoutePatternTransformer transformer) : base(provider)
+   {
+      _conventionalRoutes = new List<ConventionalRouteEntry>();
+      _order = 0;
+      _routePatternTransformer = transformer;
+      _requestDelegate = ProcessRequestAsync;
+      DefaultBuilder = new ControllerActionEndpointConventionBuilder(base.Conventions);
+   }
+
+   public ControllerActionEndpointConventionBuilder AddRoute(string routeName, 
+                                                             string pattern, 
+                                                             RouteValueDictionary defaults, 
+                                                             IDictionary<string, object> constraints,     
+                                                             RouteValueDictionary dataTokens)
+   {
+      List<Action<EndpointBuilder>> conventions = new List<Action<EndpointBuilder>>();
+      order++;
+      _conventionalRoutes.Add(new ConventionalRouteEntry(routeName, pattern, defaults,constraints, dataTokens, _order, conventions));
+      return new ControllerActionEndpointConventionBuilder(conventions);
+   }
+
+   protected override List<Endpoint> CreateEndpoints(IReadOnlyList<ActionDescriptor> actions, IReadOnlyList<Action<EndpointBuilder>> conventions)
+   {
+      var endpoints = new List<Endpoint>();
+
+      foreach (ActionDescriptor action in actions)
+      {
+         var attributeInfo = action.AttributeRouteInfo;
+         if (attributeInfo == null)   // convention routing
+         {
+            foreach (ConventionalRouteEntry route in _conventionalRoutes)
+            {
+               RoutePattern pattern = _routePatternTransformer.SubstituteRequiredValues(route.Pattern, action.RouteValues);
+               if (pattern != null)
+               {
+                  var builder = new RouteEndpointBuilder(_requestDelegate, pattern, route.Order);
+                  builder.Metadata.Add(action);
+                  endpoints.Add(builder.Build());
+               }
+            }
+         }
+         else  // convention routing
+         {
+            RoutePattern original = RoutePatternFactory.Parse(attributeInfo.Template);
+            RoutePattern pattern = _routePatternTransformer.SubstituteRequiredValues(original, action.RouteValues);
+            if (pattern != null)
+            {
+               var builder = new RouteEndpointBuilder(_requestDelegate, pattern, attributeInfo.Order);
+               builder.Metadata.Add(action);
+               endpoints.Add(builder.Build());
+            }
+         }
+      }
+
+      return endpoints;
+   }
+
+   private Task ProcessRequestAsync(HttpContext httContext)
+   {
+      var endpoint = httContext.GetEndpoint();
+      var actionDescriptor = endpoint.Metadata.GetMetadata<ActionDescriptor>();
+      var actionContext = new ActionContext
+      {
+         ActionDescriptor = actionDescriptor,
+         HttpContext = httContext
+      };
+
+      var invokerFactory = httContext.RequestServices.GetRequiredService<IActionInvokerFactory>();
+      IActionInvoker invoker = invokerFactory.CreateInvoker(actionContext);
+
+      return invoker.InvokeAsync();
+   }
+}
+//---------------------------------------------Ʌ
+
+internal struct ConventionalRouteEntry
+{
+    public string RouteName;
+    public RoutePattern Pattern { get; }
+    public RouteValueDictionary DataTokens { get; }
+    public int Order { get; }
+    public IReadOnlyList<Action<EndpointBuilder>> Conventions { get; }
+
+    public ConventionalRouteEntry(string routeName, string pattern,
+        RouteValueDictionary defaults, IDictionary<string, object> constraints,
+        RouteValueDictionary dataTokens, int order,
+        List<Action<EndpointBuilder>> conventions)
+    {
+        RouteName = routeName;
+        DataTokens = dataTokens;
+        Order = order;
+        Conventions = conventions;
+        Pattern = RoutePatternFactory.Parse(pattern, defaults, constraints);
+    }
+}
+```
+
+**Part C**
+
+```C#
+public class ActionContext 
+{
+   public ActionDescriptor ActionDescriptor { get; set; }
+   public HttpContext HttpContext { get; set; }
+}
+
+public abstract class Controller
+{
+   public ActionContext  ActionContext { get; internal set; }
+}
+
+public interface IActionInvoker
+{
+   Task InvokeAsync();
+}
+
+public interface IActionInvokerFactory
+{
+   IActionInvoker CreateInvoker(ActionContext actionContext);
+}
+
+public class ActionInvokerFactory : IActionInvokerFactory
+{
+    public IActionInvoker CreateInvoker(ActionContext actionContext) => new ControllerActionInvoker(actionContext);
+}
+
+public class ControllerActionInvoker : IActionInvoker
+{
+   public ActionContext ActionContext { get; }
+   public ControllerActionInvoker(ActionContext actionContext) => ActionContext = actionContext;
+   public Task InvokeAsync()
+   {
+      var actionDescriptor = (ControllerActionDescriptor)ActionContext.ActionDescriptor;
+      var controllerType = actionDescriptor.ControllerType;
+      var requestServies = ActionContext.HttpContext.RequestServices;
+      var controllerInstance = ActivatorUtilities.CreateInstance(requestServies, controllerType);
+      
+      if (controllerInstance is Controller controller)
+      {
+         controller.ActionContext = ActionContext;
+      }
+
+      var actionMethod = actionDescriptor.Method;
+      var result = actionMethod.Invoke(controllerInstance, new object[0]);
+        
+      return result is Task task ? task : Task.CompletedTask;
+    }
+}
+```
 
 
 

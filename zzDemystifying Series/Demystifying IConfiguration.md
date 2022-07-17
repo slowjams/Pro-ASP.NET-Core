@@ -1,67 +1,30 @@
-Chapter 11-Configuration
+Demystifying IConfiguration
 ==============================
 
-An ***host*** is an object that encapsulates an app's resources, such as:
-<ul>
-  <li>Dependency injection (DI)</li>
-  <li>Logging</li>
-  <li>Configuration</li>
-  <li>IHostedService implementations</li>
-</ul> 
+![alt text](./zImages/IConfiguration_1.png "default providers for asp.net core application")
 
-![alt text](./zImages/11-1.png "Title")
-![alt text](./zImages/11-2.png "Title")
+For an asp.net core application, you will get 6 providers by default, they are:
 
-some source code:
-```C#
-public class Program {
-   public static void Main(string[] args) {
-      CreateHostBuilder(args).Build().Run();
-   }
+* `ChainedConfigurationProvider`
 
-   public static IHostBuilder CreateHostBuilder(string[] args) => {
-      Host.CreateDefaultBuilder(args).
-          .ConfigureWebHostDefaults(webBuilder => {
-              webBuilder.UseStartup<Startup>();
-          });
-   });
-}
+* `JsonConfigurationProvider`  (for `appsetting.json`)
 
-public static class GenericHostBuilderExtensions {
-   public static IHostBuilder ConfigureWebHostDefaults(this IHostBuilder builder, Action<IWebHostBuilder> configure) {
-      return builder.ConfigureWebHost(webHostBuilder => {
-            WebHost.ConfigureWebDefaults(webHostBuilder);
-            configure(webHostBuilder);
-      });
-   }
-}
+* `JsonConfigurationProvider`  (for `appsetting.Development.json`)
 
-public static class WebHost {
-   ...
-   internal static void ConfigureWebDefaults(IWebHostBuilder builder) {
-      builder.ConfigureAppConfiguration((ctx, cb) => {
-         if (ctx.HostingEnvironment.IsDevelopment()) {
-            StaticWebAssetsLoader.UseStaticWebAssets(ctx.HostingEnvironment, ctx.Configuration);
-         }
-      });
+* `JsonConfigurationProvider`  (for `secrets.json`)
 
-      builder.UseKestrel((builderContext, options) => {
-         options.Configure(builderContext.Configuration.GetSection("Kestrel"), reloadOnChange: true);
-      })
-      .ConfigureServices((hostingContext, services) => {
-          ...
-          services.AddTransient<IStartupFilter, HostFilteringStartupFilter>();
-          services.AddTransient<IStartupFilter, ForwardedHeadersStartupFilter>();
-          services.AddTransient<IConfigureOptions<ForwardedHeadersOptions>, ForwardedHeadersOptionsSetup>();
-          services.AddRouting();   // register routing related services e.g. LinkGenerator, so you don't need to add them or call AddRouting() in Startup.cs
-      }
-      .UseIIS()
-      .UseIISIntegration();
-   }
-}
-```
+* `EnvironmentVariablesConofigurationProvider`
+
+* `CommandLineConfigurationProvider`
+
 ```C#
 public static class Host {
+
+   private List<Action<IConfigurationBuilder>> _configureHostConfigActions = new List<Action<IConfigurationBuilder>>();
+   private List<Action<HostBuilderContext, IConfigurationBuilder>> _configureAppConfigActions = new List<Action<HostBuilderContext, IConfigurationBuilder>>();
+
+   private IConfiguration _hostConfiguration;  // this is the starting point for _appConfiguration,
+   private IConfiguration _appConfiguration;  
 
    public static IHostBuilder CreateDefaultBuilder() => CreateDefaultBuilder(args: null);
 
@@ -76,7 +39,7 @@ public static class Host {
             config.AddCommandLine(args);
          }
       });
-      // ------------------Configures application settings, the is the main topic of this chapter----------------------------------------------
+
       builder.ConfigureAppConfiguration((hostingContext, config) => {   // hostingContext is HostBuilderContext, config is IConfigurationBuilder
           IHostEnvironment env = hostingContext.HostingEnvironment;
           bool reloadOnChange = hostingContext.Configuration.GetValue("hostBuilder:reloadConfigOnChange", defaultValue: true);
@@ -91,241 +54,152 @@ public static class Host {
              }
           }
 
-          config.AddEnvironmentVariables();
+          // config is ConfigurationBuilder
+          config.AddEnvironmentVariables();  // <------------------------a1
 
           if (args != null) {
              config.AddCommandLine(args);
           }
       });
-      // ----------------------------------------------------------------------------------------------------------------------------------------
-      builder.ConfigureLogging((hostingContext, logging) => {
-         logging.AddConfiguration(hostingContext.Configuration.GetSection("Logging"));
-         logging.AddConsole();
-         logging.AddDebug();
-      });
-
-      // Configures the DI container
-      builder.UseDefaultServiceProvider((context, options) => {
-         var isDevelopment = context.HostingEnvironment.IsDevelopment();
-         options.ValidateScopes = isDevelopment;
-         options.ValidateOnBuild = isDevelopment;
-      });
-
+    
       return builder;
    }
 }
-//------------------------------------------------------------------------------------------------------------------------------
-public interface IHostBuilder {
-   IDictionary<object, object> Properties { get; }
 
-   IHostBuilder ConfigureAppConfiguration(Action<HostBuilderContext, IConfigurationBuilder> configureDelegate);
-   IHostBuilder ConfigureContainer<TContainerBuilder>(Action<HostBuilderContext, TContainerBuilder> configureDelegate);
-   IHostBuilder ConfigureHostConfiguration(Action<IConfigurationBuilder> configureDelegate);
-   IHostBuilder ConfigureServices(Action<HostBuilderContext, IServiceCollection> configureDelegate);
-   IHostBuilder UseServiceProviderFactory<TContainerBuilder>(IServiceProviderFactory<TContainerBuilder> factory);
-   IHostBuilder UseServiceProviderFactory<TContainerBuilder>(Func<HostBuilderContext, IServiceProviderFactory<TContainerBuilder>> factory);
-
-   IHost Build();
-}
-
-public static class HostingHostBuilderExtensions {
-   ...
-   public static IHostBuilder UseContentRoot(this IHostBuilder hostBuilder, string contentRoot) {
-      return hostBuilder.ConfigureHostConfiguration(configBuilder => {
-         configBuilder.AddInMemoryCollection(new[] {
-            new KeyValuePair<string, string>(HostDefaults.ContentRootKey,
-            contentRoot  ?? throw new ArgumentNullException(nameof(contentRoot)))
-         });
-      });
-   }
-   
-   // specify the IServiceProvider to be the default one
-   public static IHostBuilder UseDefaultServiceProvider(this IHostBuilder hostBuilder, Action<HostBuilderContext, ServiceProviderOptions> configure) {
-      return hostBuilder.UseServiceProviderFactory(context => {
-         var options = new ServiceProviderOptions();
-         configure(context, options);
-         return new DefaultServiceProviderFactory(options);
-      });
-   }
-
-   public static IHostBuilder ConfigureLogging(this IHostBuilder hostBuilder, Action<ILoggingBuilder> configureLogging) {
-      return hostBuilder.ConfigureServices((context, collection) => collection.AddLogging(builder => configureLogging(builder)));
-   }
-}
-
-public class HostBuilder : IHostBuilder {
-   private List<Action<IConfigurationBuilder>> _configureHostConfigActions = new List<Action<IConfigurationBuilder>>();
-   private List<Action<HostBuilderContext, IConfigurationBuilder>> _configureAppConfigActions = new List<Action<HostBuilderContext, IConfigurationBuilder>>();
-   private List<Action<HostBuilderContext, IServiceCollection>> _configureServicesActions = new List<Action<HostBuilderContext, IServiceCollection>>();
-   private List<IConfigureContainerAdapter> _configureContainerActions = new List<IConfigureContainerAdapter>();
-   private IServiceFactoryAdapter _serviceProviderFactory = new ServiceFactoryAdapter<IServiceCollection>(new DefaultServiceProviderFactory());
-   private bool _hostBuilt;
-   private IConfiguration _hostConfiguration;
-   private IConfiguration _appConfiguration;   // will hold all the configuration key values eventually
-   private HostBuilderContext _hostBuilderContext;
-   private IHostingEnvironment _hostingEnvironment;
-   private IServiceProvider _appServices;
-
-   public IDictionary<object, object> Properties { get; } = new Dictionary<object, object>();
-
-   public IHostBuilder ConfigureHostConfiguration(Action<IConfigurationBuilder> configureDelegate) {
-      _configureHostConfigActions.Add(configureDelegate ?? throw new ArgumentNullException(nameof(configureDelegate)));
-      return this;
-   }
-
-   public IHostBuilder ConfigureAppConfiguration(Action<HostBuilderContext, IConfigurationBuilder> configureDelegate) {
-      _configureAppConfigActions.Add(configureDelegate ?? throw new ArgumentNullException(nameof(configureDelegate)));
-      return this;
-   }
-
-   public IHostBuilder ConfigureServices(Action<HostBuilderContext, IServiceCollection> configureDelegate) {
-      _configureServicesActions.Add(configureDelegate ?? throw new ArgumentNullException(nameof(configureDelegate)));
-      return this;
-   }
-
-   // overrides the factory used to create the service provider
-   public IHostBuilder UseServiceProviderFactory<TContainerBuilder>(IServiceProviderFactory<TContainerBuilder> factory) {
-       _serviceProviderFactory = new ServiceFactoryAdapter<TContainerBuilder>(factory ?? throw new ArgumentNullException(nameof(factory)));
-       return this;
-   }
-   ...
-   public IHost Build() {
-      if (_hostBuilt) {
-         throw new InvalidOperationException("Build can only be called once.");
-      }
-      _hostBuilt = true;
-
-      BuildHostConfiguration();     // add environment related providers to ConfigurationBuilder
-      CreateHostingEnvironment();   // provide HostingEnvironment that tells the app the environment e.g "Development"
-      CreateHostBuilderContext();   // provide HostBuilderContext for BuildAppConfiguration as the first paramater to execute the delegate
-      BuildAppConfiguration();
-      CreateServiceProvider();
-
-      return _appServices.GetRequiredService<IHost>();
-   }
-
-   private void BuildHostConfiguration() {
-      var configBuilder = new ConfigurationBuilder();
-      foreach (var buildAction in _configureHostConfigActions) {
-         buildAction(configBuilder);
-      }
-      _hostConfiguration = configBuilder.Build();
-   }
-
-   private void CreateHostingEnvironment() {
-      _hostingEnvironment = new HostingEnvironment() {
-         ApplicationName = _hostConfiguration[HostDefaults.ApplicationKey],
-         EnvironmentName = _hostConfiguration[HostDefaults.EnvironmentKey] ?? EnvironmentName.Production,
-         ContentRootPath = ResolveContentRootPath(_hostConfiguration[HostDefaults.ContentRootKey], AppContext.BaseDirectory),
-      }
-      _hostingEnvironment.ContentRootFileProvider = new PhysicalFileProvider(_hostingEnvironment.ContentRootPath);
-   }
-
-   private void CreateHostBuilderContext() {
-      _hostBuilderContext = new HostBuilderContext(Properties) {
-         HostingEnvironment = _hostingEnvironment,
-         Configuration = _hostConfiguration
-      }
-   }
-
-   private void BuildAppConfiguration() {
-      var configBuilder = new ConfigurationBuilder();
-      configBuilder.AddConfiguration(_hostConfiguration);
-      foreach (var buildAction in _configureAppConfigActions) {
-         buildAction(_hostBuilderContext, configBuilder);
-      }
-      _appConfiguration = configBuilder.Build();   // _appConfiguration is ConfigurationRoot, and note that IConfigurationRoot : IConfiguration
-      _hostBuilderContext.Configuration = _appConfiguration;
-   }
-
-   private void CreateServiceProvider() {
-      var services = new ServiceCollection();
-      services.AddSingleton(_hostingEnvironment);
-      services.AddSingleton(_hostBuilderContext);
-      services.AddSingleton(_appConfiguration); // register ConfigurationRoot as IConfiguration
-                                                // _appConfiguration is ConfigurationRoot but declared as IConfiguration
-      services.AddSingleton<IApplicationLifetime, ApplicationLifetime>();
-      services.AddSingleton<IHostLifetime, ConsoleLifetime>();
-      services.AddSingleton<IHost, Host>();
-      services.AddOptions();
-      services.AddLogging();
-
-      foreach (var configureServicesAction in _configureServicesActions) {
-         configureServicesAction(_hostBuilderContext, services);
-      }
-
-      var containerBuilder = _serviceProviderFactory.CreateBuilder(services);   // containerBuilder is ServiceCollection
-
-      foreach (var containerAction in _configureContainerActions) {
-         containerAction.ConfigureContainer(_hostBuilderContext, containerBuilder);
-      }
-
-      _appServices = _serviceProviderFactory.CreateServiceProvider(containerBuilder);   // it registers IServiceProvider internally (in ServiceProviderEngine)
-                                                                                        // this is why we can inject IServiceProvider (root scope) into our services
-   }
-   ...
-}
-
-public class DefaultServiceProviderFactory : IServiceProviderFactory<IServiceCollection> {
-   private readonly ServiceProviderOptions _options;
-
-   public DefaultServiceProviderFactory() : this(ServiceProviderOptions.Default) { }
-   ...
-
-   public IServiceCollection CreateBuilder(IServiceCollection services) {
-      return services;
-   }
-
-   public IServiceProvider CreateServiceProvider(IServiceCollection containerBuilder) {
-      return containerBuilder.BuildServiceProvider(_options);
-   }
-}
-
-public class HostBuilderContext {
-   public HostBuilderContext(IDictionary<object, object> properties);
-   public IConfiguration Configuration { get; set; }
-   public IHostEnvironment HostingEnvironment { get; set; }
-   public IDictionary<object, object> Properties { get; }
-}
-//---------------------------------------------------------------------------------------------------------------------------------------
-public static class JsonConfigurationExtensions {
-   public static IConfigurationBuilder AddJsonFile(this IConfigurationBuilder builder, string path) {
-      return AddJsonFile(builder, provider: null, path: path, optional: false, reloadOnChange: false);
-   }
-   ...
-   public static IConfigurationBuilder AddJsonFile(this IConfigurationBuilder builder, IFileProvider provider, string path, bool optional, bool reloadOnChange) {
-      return builder.AddJsonFile(s => {   // s is JsonConfigurationSource
-         s.FileProvider = provider;
-         s.Path = path;
-         s.Optional = optional;
-         s.ReloadOnChange = reloadOnChange;
-         s.ResolveFileProvider();
-      });
-   }
-   public static IConfigurationBuilder AddJsonFile(this IConfigurationBuilder builder, Action<JsonConfigurationSource> configureSource) {
+//----------------------------------------------V
+public static class EnvironmentVariablesExtensions 
+{
+   public static IConfigurationBuilder AddEnvironmentVariables(this IConfigurationBuilder builder, Action<EnvironmentVariablesConfigurationSource> configureSource)
+   {
       builder.Add(configureSource);
    }
+
+   public static IConfigurationBuilder AddEnvironmentVariables(this IConfigurationBuilder configurationBuilder)
+   {
+      configurationBuilder.Add(new EnvironmentVariablesConfigurationSource());     // <------------------------a2
+      return configurationBuilder;
+   }
+   // ...
 }
 
-/*------------------------------------------------------------*/
+//
+public interface IConfigurationSource {
+   IConfigurationProvider Build(IConfigurationBuilder builder);
+}
+//
 
-public interface IConfigurationBuilder {
+public class EnvironmentVariablesConfigurationSource : IConfigurationSource {
+   public string Prefix { get; set; }
+
+   public IConfigurationProvider Build(IConfigurationBuilder builder) {   // builder is not used
+      return new EnvironmentVariablesConfigurationProvider(Prefix);
+   }
+}
+
+public class EnvironmentVariablesConfigurationProvider : ConfigurationProvider {
+   private const string MySqlServerPrefix = "MYSQLCONNSTR_";
+   private const string SqlAzureServerPrefix = "SQLAZURECONNSTR_";
+   private const string CustomConnectionStringPrefix = "CUSTOMCONNSTR_";
+   // ...
+   public override void Load() {
+      Load(Environment.GetEnvironmentVariables());   
+      /* Environment.GetEnvironmentVariables() return 63 variables in this machine's local
+         ["path"]
+         ["TEMP"]
+         ["COMPUTERNAME"]
+         ["ProgramFiles"]
+         ...
+      */
+   }
+
+   internal void Load(IDictionary envVariables) {
+      var data = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+      
+      IDictionaryEnumerator e = envVariables.GetEnumerator();
+
+      while (e.MoveNext())
+      {
+         string key = (string)e.Entry.Key;
+         string? value = (string?)e.Entry.Value;
+
+         if (key.StartsWith(SqlServerPrefix, StringComparison.OrdinalIgnoreCase)
+         {
+            HandleMatchedConnectionStringPrefix(data, SqlServerPrefix, "System.Data.SqlClient", key, value);
+         }
+
+         // ... handle other connection strings and add other environment variable to data
+      }
+
+      Data = data;
+   }
+   // ...
+}
+//-----------------------------------------------Ʌ
+```
+
+## `IConfiguration` Source Code
+
+```C#
+//-----------------------------------------V
+public static class ConfigurationExtensions
+{
+   public static IConfigurationBuilder Add<TSource>(this IConfigurationBuilder builder, Action<TSource> configureSource) where TSource : IConfigurationSource, new() 
+   {
+      var source = new TSource();
+      configureSource(source);
+      return builder.Add(source);
+   }
+
+   public static string GetConnectionString(this IConfiguration configuration, string name)  // what we normally use to get connection string
+   {
+      return configuration?.GetSection("ConnectionStrings")[name];
+   }
+
+   public static IEnumerable<KeyValuePair<string, string?>> AsEnumerable(this IConfiguration configuration) => configuration.AsEnumerable(makePathsRelative: false);
+   // ...
+
+   public static bool Exists(this IConfigurationSection section)
+   {
+      return section.Value != null || section.GetChildren().Any();
+   }
+
+   public static IConfigurationSection GetRequiredSection(this IConfiguration configuration, string key)
+   {
+      IConfigurationSection section = configuration.GetSection(key);
+      if (section.Exists())
+      {
+         return section;
+      }
+
+      throw new InvalidOperationException(...);
+   }
+}
+//-----------------------------------------Ʌ
+
+//------------------------------------V
+public interface IConfigurationBuilder    
+{
    IDictionary<string, object> Properties { get; }
+
+   // contains a list of source
    IList<IConfigurationSource> Sources { get; }
+
    IConfigurationBuilder Add(IConfigurationSource source);
+
    IConfigurationRoot Build();
 }
 
-public class ConfigurationBuilder : IConfigurationBuilder {
+public class ConfigurationBuilder : IConfigurationBuilder 
+{
     public IList<IConfigurationSource> Sources { get; } = new List<IConfigurationSource>();
 
     public IDictionary<string, object> Properties { get; } = new Dictionary<string, object>();
 
-    public IConfigurationBuilder Add(IConfigurationSource source) {
+    public IConfigurationBuilder Add(IConfigurationSource source) {    // <------------------------a3
        if (source == null) {
           throw new ArgumentNullException(nameof(source));
        }
-       Sources.Add(source);
+       Sources.Add(source);    // <------------------------a3.1
        return this;
     }
 
@@ -339,68 +213,86 @@ public class ConfigurationBuilder : IConfigurationBuilder {
     }
 }
 
-public interface IConfigurationSource {
+public interface IConfigurationSource   // return IConfigurationProvider instance which contains a concrete ConfigurationProvider that provides values for our application
+{
    IConfigurationProvider Build(IConfigurationBuilder builder);
 }
+//------------------------------------Ʌ
 
-public class EnvironmentVariablesConfigurationSource : IConfigurationSource {
-   public string Prefix { get; set; }
-
-   public IConfigurationProvider Build(IConfigurationBuilder builder) {
-      return new EnvironmentVariablesConfigurationProvider(Prefix);
-   }
+public interface IConfiguration {
+   string this[string key] { get; set; }
+   IEnumerable<IConfigurationSection> GetChildren();
+   IChangeToken GetReloadToken();
+   IConfigurationSection GetSection(string key);
 }
 
-//----------------------------------------------------------------------------------------------------
-public static class EnvironmentVariablesExtensions {
-   ...
-   public static IConfigurationBuilder AddEnvironmentVariables(this IConfigurationBuilder configurationBuilder) {
-      configurationBuilder.Add(new EnvironmentVariablesConfigurationSource());
-      return configurationBuilder;
-   }
-
-   public static IConfigurationBuilder AddEnvironmentVariables( this IConfigurationBuilder configurationBuilder, string prefix) {
-      configurationBuilder.Add(new EnvironmentVariablesConfigurationSource { Prefix = prefix });
-      return configurationBuilder;
-   }
-
-   public static IConfigurationBuilder AddEnvironmentVariables(this IConfigurationBuilder builder, Action<EnvironmentVariablesConfigurationSource> configureSource) => builder.Add(configureSource);
+//--------------------------------VV
+public interface IConfigurationRoot : IConfiguration {
+   IEnumerable<IConfigurationProvider> Providers { get; }
+   void Reload();
 }
 
-public interface IConfigurationSource {
-   IConfigurationProvider Build(IConfigurationBuilder builder);
-}
+public class ConfigurationRoot : IConfigurationRoot 
+{
+   private IList<IConfigurationProvider> _providers;    // <-------------------------------- IConfigurationRoot is just a wrapper on a List of IConfigurationProvider
+   private ConfigurationReloadToken _changeToken = new ConfigurationReloadToken();
 
-public class EnvironmentVariablesConfigurationSource : IConfigurationSource {
-   public string Prefix { get; set; }
-
-   public IConfigurationProvider Build(IConfigurationBuilder builder) {
-      return new EnvironmentVariablesConfigurationProvider(Prefix);
-   }
-}
-
-public class EnvironmentVariablesConfigurationProvider : ConfigurationProvider {
-   private const string MySqlServerPrefix = "MYSQLCONNSTR_";
-   private const string SqlAzureServerPrefix = "SQLAZURECONNSTR_";
-   ...
-   public override void Load() {
-      Load(Environment.GetEnvironmentVariables());
-   }
-
-   internal void Load(IDictionary envVariables) {
-      Data = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-      
-      var filteredEnvVariables = envVariables.Cast<DictionaryEntry>().SelectMany(AzureEnvToAppEnv).Where(entry => ((string)entry.Key).StartsWith(_prefix, StringComparison.OrdinalIgnoreCase));
-
-      foreach (var envVariable in filteredEnvVariables) {
-         var key = ((string)envVariable.Key).Substring(_prefix.Length);
-         Data[key] = (string)envVariable.Value;
+   public ConfigurationRoot(IList<IConfigurationProvider> providers) 
+   {
+      _providers = providers;
+      foreach (var p in providers) 
+      {
+         p.Load();
+         ChangeToken.OnChange(() => p.GetReloadToken(), () => RaiseChanged());
       }
    }
-   ...
-}
-/*--------------------------------------------------------------------------------------------------------*/
 
+   public IEnumerable<IConfigurationProvider> Providers => _providers;
+
+   public string this[string key] {     // <------------------------------ core function
+      get {
+         foreach (var provider in _providers.Reverse()) {
+            string value;
+            if (provider.TryGet(key, out value)) {
+               return value;
+            }
+         }
+         return null;
+      }
+
+      set {
+         foreach (var provider in _providers) {
+            provider.Set(key, value);
+         }
+      }
+   }
+
+   public IConfigurationSection GetSection(string key) => new ConfigurationSection(this, key);   // <------------------- this is important, pass itsefl to ConfigurationSection
+
+   public IChangeToken GetReloadToken() => _changeToken;
+
+   public IEnumerable<IConfigurationSection> GetChildren() => GetChildrenImplementation(null);
+
+   internal IEnumerable<IConfigurationSection> GetChildrenImplementation(string path) {
+      return _providers.Aggregate(Enumerable.Empty<string>(), seed, source) => source.GetChildKeys(seed, path))
+                       .Distinct()
+                       .Select(key => GetSection(path == null ? key : ConfigurationPath.Combine(path, key)));
+   }
+
+   public void Reload() {
+      foreach (var provider in _providers) {
+         provider.Load();
+      }
+   }
+
+   private void RaiseChanged() {
+      var previousToken = Interlocked.Exchange(ref _changeToken, new ConfigurationReloadToken());
+      previousToken.OnReload();
+   }
+}
+//--------------------------------ɅɅ
+
+//-------------------------------------V
 public interface IConfigurationProvider {
    IEnumerable<string> GetChildKeys(IEnumerable<string> earlierKeys, string parentPath);
    IChangeToken GetReloadToken();
@@ -409,10 +301,12 @@ public interface IConfigurationProvider {
    bool TryGet(string key, out string value);
 }
 
-public abstract class ConfigurationProvider : IConfigurationProvider {
+public abstract class ConfigurationProvider : IConfigurationProvider
+{
+   protected IDictionary<string, string> Data { get; set; }  // <----------------------  IConfigurationProvider is just a wrapper around a Dictionary property
+   
    private ConfigurationReloadToken _reloadToken = new ConfigurationReloadToken();
-   protected IDictionary<string, string> Data { get; set; }
-
+   
    protected ConfigurationProvider() {
       Data = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
    }
@@ -446,135 +340,9 @@ public abstract class ConfigurationProvider : IConfigurationProvider {
       previousToken.OnReload();
    }
 }
+//-------------------------------------Ʌ
 
-public class EnvironmentVariablesConfigurationProvider : ConfigurationProvider {
-   private const string MySqlServerPrefix = "MYSQLCONNSTR_";
-   private const string SqlAzureServerPrefix = "SQLAZURECONNSTR_";
-   private const string SqlServerPrefix = "SQLCONNSTR_";
-   private const string CustomPrefix = "CUSTOMCONNSTR_";
-
-   private const string ConnStrKeyFormat = "ConnectionStrings:{0}";
-   private const string ProviderKeyFormat = "ConnectionStrings:{0}_ProviderName";
-
-   private readonly string _prefix;
-
-   public EnvironmentVariablesConfigurationProvider() : this(string.Empty) { }
-
-   public EnvironmentVariablesConfigurationProvider(string prefix) {
-      _prefix = prefix ?? string.Empty;
-   }
-
-   public override void Load() {
-      Load(Environment.GetEnvironmentVariables());
-   }
-
-   internal void Load(IDictionary envVariables) {
-      Data = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-      
-      var filteredEnvVariables = envVariables.Cast<DictionaryEntry>().SelectMany(AzureEnvToAppEnv).Where(entry => ((string)entry.Key).StartsWith(_prefix, StringComparison.OrdinalIgnoreCase));
-
-      foreach (var envVariable in filteredEnvVariables) {
-         var key = ((string)envVariable.Key).Substring(_prefix.Length);
-         Data[key] = (string)envVariable.Value;
-      }
-   }
-
-   private static string NormalizeKey(string key) {
-      return key.Replace("__", ConfigurationPath.KeyDelimiter);   // KeyDelimiter is ":"
-   }
-
-   private static IEnumerable<DictionaryEntry> AzureEnvToAppEnv(DictionaryEntry entry) {
-      var key = (string)entry.Key;
-      var prefix = string.Empty;
-      var provider = string.Empty;
-
-      if (key.StartsWith(MySqlServerPrefix, StringComparison.OrdinalIgnoreCase)) {
-         prefix = MySqlServerPrefix;
-         provider = "MySql.Data.MySqlClient";
-      } else if (key.StartsWith(SqlAzureServerPrefix, StringComparison.OrdinalIgnoreCase)) {
-         prefix = SqlAzureServerPrefix;
-         provider = "System.Data.SqlClient";
-      } else if (key.StartsWith(SqlServerPrefix, StringComparison.OrdinalIgnoreCase)) {
-         prefix = SqlServerPrefix;
-         provider = "System.Data.SqlClient";
-      ...
-   }
-}
-//-----------------------------------------------------------------------------------------------------------
-public interface IConfiguration {   // namespace Microsoft.Extensions.Configuration; Assembly Microsoft.Extensions.Configuration.Abstractions
-   string this[string key] { get; set; }
-   IConfigurationSection GetSection(string key);
-   ...
-}
-
-public interface IConfigurationRoot : IConfiguration {
-   IEnumerable<IConfigurationProvider> Providers { get; }
-   void Reload();
-}
-
-public class ConfigurationRoot : IConfigurationRoot {
-   private IList<IConfigurationProvider> _providers;
-   private ConfigurationReloadToken _changeToken = new ConfigurationReloadToken();
-
-   public ConfigurationRoot(IList<IConfigurationProvider> providers) {
-      _providers = providers;
-      foreach (var p in providers) {
-         p.Load();
-         ChangeToken.OnChange(() => p.GetReloadToken(), () => RaiseChanged());
-      }
-   }
-
-   public IEnumerable<IConfigurationProvider> Providers => _providers;
-
-   public string this[string key] {
-      get {
-         foreach (var provider in _providers.Reverse()) {
-            string value;
-            if (provider.TryGet(key, out value)) {
-               return value;
-            }
-         }
-         return null;
-      }
-
-      set {
-         foreach (var provider in _providers) {
-            provider.Set(key, value);
-         }
-      }
-   }
-
-   public IConfigurationSection GetSection(string key) => new ConfigurationSection(this, key);
-
-   public IChangeToken GetReloadToken() => _changeToken;
-
-   public IEnumerable<IConfigurationSection> GetChildren() => GetChildrenImplementation(null);
-
-   internal IEnumerable<IConfigurationSection> GetChildrenImplementation(string path) {
-      return _providers.Aggregate(Enumerable.Empty<string>(), seed, source) => source.GetChildKeys(seed, path))
-                       .Distinct()
-                       .Select(key => GetSection(path == null ? key : ConfigurationPath.Combine(path, key)));
-   }
-
-   public void Reload() {
-      foreach (var provider in _providers) {
-         provider.Load();
-      }
-   }
-
-   private void RaiseChanged() {
-      var previousToken = Interlocked.Exchange(ref _changeToken, new ConfigurationReloadToken());
-      previousToken.OnReload();
-   }
-}
-//-------------------------------------------------------------------------------------------------------------------
-/*
-public interface IConfiguration {
-   string this[string key] { get; set; }
-   IConfigurationSection GetSection(string key);
-   ...
-}
-*/
+//------------------------------------V
 public interface IConfigurationSection : IConfiguration {
    string Key { get; }
    string Path { get; }
@@ -582,7 +350,7 @@ public interface IConfigurationSection : IConfiguration {
 }
 
 public class ConfigurationSection : IConfigurationSection {
-   private readonly ConfigurationRoot _root;
+   private readonly ConfigurationRoot _root;   // <---------------------
    private readonly string _path;
    private string _key;
 
@@ -627,6 +395,7 @@ public class ConfigurationSection : IConfigurationSection {
 
     public IChangeToken GetReloadToken() => _root.GetReloadToken();
 }
+//------------------------------------Ʌ
 
 public static class ConfigurationPath {
    public static readonly string KeyDelimiter = ":";
@@ -678,8 +447,6 @@ Look at the source code of `Host.CreateDefaultBuilder(args)`:
 ```C#
 public class HostBuilder : IHostBuilder {
    private IConfiguration _appConfiguration;
-   ...
-   private IConfiguration _appConfiguration; 
    ...
    private void BuildAppConfiguration() {
       var configBuilder = new ConfigurationBuilder();
@@ -746,10 +513,11 @@ public class EnvironmentVariablesConfigurationProvider : ConfigurationProvider {
    ...
 }
 ```
-You might ask why we need an extra layer of ConfigurationSource which returns a concrete provider in its Build method? Why not just get rid of `IConfigurationSource` and return a concrete ConfigurationProvider directly? 
+You might ask why we need an extra layer of `ConfigurationSource` which returns a concrete provider in its Build method? Why not just get rid of `IConfigurationSource` and return a concrete ConfigurationProvider directly? 
 The reason that we use `IConfigurationSource` is to have granular control on a provider. Image a scenario that you don't want to load all environment variable:
+
 ```
-set RANDOM_VALUE=BlipBlipBlip   // you don't this one
+set RANDOM_VALUE=BlipBlipBlip    --you don't want this one
 set COMPONENTS__DATABASE__CONNECTION=connection-string
 set COMPONENTS__FILES__PATH=/etc/path
 set LOGGING__ENABLED=True
@@ -761,7 +529,7 @@ var config = new ConfigurationBuilder()
     .AddEnvironmentVariables()
     .Build();
 ```
-You’d get everything, even maybe stuff you don't want:
+You'd get everything, even maybe stuff you don't want:
 ```
 components:database:connection = "connection-string"
 components:files:path = "/etc/path"
@@ -778,11 +546,13 @@ set CONFIGURATION_LOGGING__ENABLED=True
 set CONFIGURATION_LOGGING__LEVEL=Debug
 ```
 Now specify a prefix in the configuration build:
+
 ```C#
 var config = new ConfigurationBuilder()
     .AddEnvironmentVariables("CONFIGURATION_")
     .Build();
 ```
+
 That's how ConfigurationSource kicks in:
 ```C#
 public class EnvironmentVariablesConfigurationSource : IConfigurationSource {
@@ -814,15 +584,8 @@ Let's go back to `ConfigurationBuilder.Build()`, now we have a list of providers
 
 ![alt text](./zImages/11-5.png "Title")
 
-Now you see that what you inject and uses `IConfiguration`, you are using ConfigurationRoot that contains a list of providers. When you ask an IConfigurationRoot for a configuration item, it iterates through the set of providers (in reverse order - that's how the "override" works) until it finds the value, then returns the first value found. If no value is found, it returns null.
-Only file-based providers handle reloading on change events.  Usually this is either because there's not a reasonable way to receive a change event; or it doesn't make sense that the values would change during runtime:
-
-<ul>
-  <li>Azure Key Vault</li>
-  <li>Command Line</li>
-  <li>Environment Variables</li>
-  <li>User Secrets (the underlying provider here is JSON files but the code specifically turns off the reload on change flag)</li>
-</ul> 
+Now you see that what you inject and uses `IConfiguration`, you are using `ConfigurationRoot` that contains a list of providers. When you ask an IConfigurationRoot for a configuration item, it iterates through the set of providers (in reverse order - that's how the "override" works) until it finds the value, then returns the first value found. If no value is found, it returns null.
+Only file-based providers handle reloading on change events.  Usually this is either because there's not a reasonable way to receive a change event; or it doesn't make sense that the values would change during runtime.
 
 So in these cases, you can manually call `Reload` method of `ConfigurationRoot`.
 
@@ -870,7 +633,7 @@ string includeScopes = configRoot["logging:includescopes"]   // includeScopes is
 
 var loggingSection = configRoot.GetSection("logging");
 
-string loggingDefaultV1 = configRoot["logging:loglevel:default"] 
+string loggingDefaultV1 = configRoot["logging:loglevel:default"];
 string loggingDefaultV2 = loggingSection["loglevel:default"]   // no need to include "logging" anymore
 ```
 
@@ -1121,7 +884,7 @@ public void ConfigureServices(IServiceCollection services) {
    services.Configure<SlackApiSettings>("Public", Configuration.GetSection("SlackApi:PublicChannel")); 
 }
 ```
-To use these named options. **you must inject `IOptionsSnapsShot<T>`, not `IOptions<T>`** into the SlackNotificationService. This gives you access to the IOptionsSnapshot<T>.Get(name) method, that you can use to retrieve the individual options:
+To use these named options. **you must inject `IOptionsSnapsShot<T>`, not `IOptions<T>`** into the SlackNotificationService. This gives you access to the `IOptionsSnapshot<T>`.Get(name) method, that you can use to retrieve the individual options:
 ```C#
 public class SlackNotificationService {
    private readonly SlackApiSettings _devSettings;
@@ -1441,300 +1204,9 @@ public class OptionsMonitor<TOptions> : IOptionsMonitor<TOptions> where TOptions
       public void Dispose() => _monitor._onChange -= OnChange;
    }
 }
-//------------------------------------------------------------------------------------------------------
 ```
 
-Now you might see that when you register your own service in Startup.cs, Startup.cs's ConfigureServices method must somehow "connect" to the HostBuilder in Program.CS
 
-So how does Startup.cs's ConfigureServices method influence `HostBuilder`s `_configureServicesActions` so that the services you register in Startup.cs can be actually add to the Host in Program.cs? It is the `ConfigureWebHostDefaults` method acts as the bridge.
-
-
-If you want to add your own provider, you can do :
-```C#
-public class Program
-{
-   public static void Main(string[] args) {
-      CreateHostBuilder(args).Build().Run();
-   }
-
-   public static IHostBuilder CreateHostBuilder(string[] args) =>
-       Host.CreateDefaultBuilder(args)
-           .ConfigureAppConfiguration((hostingContext, config) => {
-              if (hostingContext.HostingEnvironment.IsDevelopment()) {
-                 config.AddXXX();
-              }
-           })
-           .ConfigureWebHostDefaults(webBuilder => {
-              webBuilder.UseStartup<Startup>();
-           });   
-}
-```
-
-## Logging Source Code
-
-```C#
-public class Program {
-   public static void Main(string[] args) {
-      CreateHostBuilder(args).Build().Run();
-   }
-
-   public static IHostBuilder CreateHostBuilder(string[] args) =>
-       Host.CreateDefaultBuilder(args)
-           .ConfigureWebHostDefaults(webBuilder => {
-              webBuilder.UseStartup<Startup>();
-           })
-           .ConfigureLogging(logger => {
-              logger.AddConsole(options => {
-                 options.IncludeScopes = true;
-              });
-           });
-}
-```
-```C#
-//------------------V
-public enum LogLevel {
-   // Logs that contain the most detailed messages. These messages may contain sensitive application data.
-   // These messages are disabled by default and should never be enabled in a production environment.
-   Trace = 0,    
-
-   // Logs that are used for interactive investigation during development. 
-   //These logs should primarily contain information useful for debugging and have no long-term value
-   Debug = 1,
-
-   // Logs that track the general flow of the application. These logs should have long-term value.
-   Information = 2,
-   
-   // Logs that highlight an abnormal or unexpected event in the application flow, but do not otherwise cause the application to stop
-   Warning = 3,
-
-   // Logs that highlight when the current flow of execution is stopped due to a failure. 
-   // These should indicate a failure in the current activity, not an application-wide failure
-   Error = 4,
-
-   // Logs that describe an unrecoverable application or system crash, or a catastrophic failure that requires immediate attention
-   Critical =5,
-
-   // Not used for writing log messages. Specifies that a logging category should not write any message
-   None = 6
-}
-//------------------Ʌ
-
-//------------------------------------------------------------------V
-public interface ILogger {
-   void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter);
-   bool IsEnabled(LogLevel logLevel);
-   IDisposable BeginScope<TState>(TState state);
-}
-
-internal sealed class Logger : ILogger {
-   public LoggerInformation[] Loggers { get; set; }
-   public MessageLogger[] MessageLoggers { get; set; }
-   public ScopeLogger[] ScopeLoggers { get; set; }
-
-   public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter) {
-      MessageLogger[] loggers = MessageLoggers;
-
-      List<Exception> exceptions = null;
-      for (int i = 0; i < loggers.Length; i++) {
-         ref readonly MessageLogger loggerInfo = ref loggers[i];
-         if (!loggerInfo.IsEnabled(logLevel)) {
-            continue;
-         }
-         LoggerLog(logLevel, eventId, loggerInfo.Logger, exception, formatter, ref exceptions, state);
-      }
-
-      if (exceptions != null && exceptions.Count > 0) {
-         ThrowLoggingError(exceptions);
-      }
-
-      static void LoggerLog(LogLevel logLevel, EventId eventId, ILogger logger, Exception exception, Func<TState, Exception, string> formatter, ref List<Exception> exceptions, in TState state) {
-         try {
-            logger.Log(logLevel, eventId, state, exception, formatter);
-         }
-         catch (Exception ex) {
-            if (exceptions == null)
-               exceptions = new List<Exception>();
-            exceptions.Add(ex);
-         }
-      }
-   }
-
-   public bool IsEnabled(LogLevel logLevel) {
-      MessageLogger[] loggers = MessageLoggers;
-
-      List<Exception> exceptions = null;
-      int i = 0;
-      for (; i < loggers.Length; i++) {
-         ref readonly MessageLogger loggerInfo = ref loggers[i];
-         if (!loggerInfo.IsEnabled(logLevel)) {
-            continue;
-         }
-         if (LoggerIsEnabled(logLevel, loggerInfo.Logger, ref exceptions)) {
-            break;
-         }
-      }
-
-      if (exceptions != null && exceptions.Count > 0) {
-         ThrowLoggingError(exceptions);
-      }
-
-      return i < loggers.Length ? true : false;
-
-      static bool LoggerIsEnabled(LogLevel logLevel, ILogger logger, ref List<Exception> exceptions) {
-         try {
-            if (logger.IsEnabled(logLevel)) {
-               return true;
-            }
-         }
-         catch (Exception ex) {
-            if (exceptions == null)
-               exceptions = new List<Exception>();
-            exceptions.Add(ex);
-         }
-
-         return false;
-      }
-   }
-
-   public IDisposable BeginScope<TState>(TState state) { 
-      ScopeLogger[] loggers = ScopeLoggers;
-      
-      if (loggers.Length == 1) {
-         return loggers[0].CreateScope(state);
-      }
-
-      var scope = new Scope(loggers.Length);
-      List<Exception> exceptions = null;
-      for (int i = 0; i < loggers.Length; i++) {
-         ref readonly ScopeLogger scopeLogger = ref loggers[i];
-
-         try {
-            scope.SetDisposable(i, scopeLogger.CreateScope(state));
-         }
-         // catch         
-      }
-
-      return scope;
-   }
-
-   private sealed class Scope : IDisposable {
-      private bool _isDisposed;
-
-      private IDisposable _disposable0;
-      private IDisposable _disposable1;
-      private readonly IDisposable[] _disposable;
-
-      public Scope(int count) {
-         if (count > 2) {
-            _disposable = new IDisposable[count - 2];
-         }
-      }
-
-      public void SetDisposable(int index, IDisposable disposable) {
-         switch (index) {
-            case 0:
-               _disposable0 = disposable;
-            case 1:
-               _disposable1 = disposable;
-               break;
-            default:
-               _disposable[index - 2] = disposable;
-               break;
-         }
-      }
-
-      public void Dispose() {
-         if (!_isDisposed) {
-            _disposable0?.Dispose();
-            _disposable1?.Dispose();
-
-            if (_disposable != null) {
-               int count = _disposable.Length;
-               for (int index = 0; index != count; ++index) {
-                  if (_disposable[index] != null) {
-                     _disposable[index].Dispose();
-                  }
-               }
-            }
-
-            _isDisposed = true;
-         }
-      }
-   }
-}
-
-public class Logger<T> : ILogger<T> {
-   private readonly ILogger _logger;
-
-   public Logger(ILoggerFactory factory) {   // ILoggerFactory is registered via services.AddLogging()
-      _logger = factory.CreateLogger(TypeNameHelper.GetTypeDisplayName(typeof(T), includeGenericParameters: false, nestedTypeDelimiter: '.'));
-   }
-
-   IDisposable ILogger.BeginScope<TState>(TState state) {
-      return _logger.BeginScope(state);
-   }
-
-   bool ILogger.IsEnabled(LogLevel logLevel) {
-      return _logger.IsEnabled(logLevel);
-   }
-
-   void ILogger.Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) {
-      _logger.Log(logLevel, eventId, state, exception, formatter);
-   }
-}
-//------------------------------------------------------------------Ʌ
-```
-Note that both `ILoggerFactory` and `ILogger<T>` has been registered via `services.AddLogging()` (in `Host.CreateDefaultBuilder()`) as :
-```C#
-public static class LoggingServiceCollectionExtensions {
-   
-   public static IServiceCollection AddLogging(this IServiceCollection services) {
-      return AddLogging(services, builder => { });
-   }
-
-   public static IServiceCollection AddLogging(this IServiceCollection services, Action<ILoggingBuilder> configure) {
-      services.AddOptions();
-
-      services.TryAdd(ServiceDescriptor.Singleton<ILoggerFactory, LoggerFactory>());
-      services.TryAdd(ServiceDescriptor.Singleton(typeof(ILogger<>), typeof(Logger<>)));
-      // ...
-      return services;
-   }
-}
-```
-That's why you can use `ILogger<T>` on the fly as:
-```C#
-public class MyService {
-
-   public MyService(ILogger<MyService> logger) {
-      // ...
-   }
-   // ...
-}
-```
-
-You can see a lot of buillt-in middlewares that uses DI to inject a logger:
-```C#
-public class CookiePolicyMiddleware {
-   private readonly RequestDelegate _next;
-   private readonly ILogger _logger;
-                                                       // <-------------------------------b0
-   public CookiePolicyMiddleware(RequestDelegate next, IOptions<CookiePolicyOptions> options, ILoggerFactory factory) {
-      // ...
-      _next = next;
-      _logger = factory.CreateLogger<CookiePolicyMiddleware>();
-   }
-
-   public Task Invoke(HttpContext context) {
-      var feature = context.Features.Get<IResponseCookiesFeature>() ?? new ResponseCookiesFeature(context.Features) // <-------------b2
-      var wrapper = new ResponseCookiesWrapper(context, Options, feature, _logger);
-      context.Features.Set<IResponseCookiesFeature>(new CookiesWrapperFeature(wrapper));
-      context.Features.Set<ITrackingConsentFeature>(wrapper);
-
-      return _next(context);
-   }
-}
-```
 
 
 <!-- <code>&lt;T&gt;<code> -->

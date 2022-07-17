@@ -1,33 +1,7 @@
 Chapter 12-Understanding Middlewares
 ==============================
 
-## Understanding the ASP.NET Core Request Flow
-
-#### What is the purpose of Program.cs
-```C#
-public class Program {
-   public static void Main(string[] args) {   // run firstly
-      CreateHostBuilder(args).Build().Run();
-   }
-
-   public static IHostBuilder CreateHostBuilder(string[] args) =>
-       Host.CreateDefaultBuilder(args)
-           .ConfigureWebHostDefaults(webBuilder => {
-              webBuilder.UseStartup<Startup>();
-           });
-}
-```
-An ***host*** is an object that encapsulates an app's resources, such as:
-<ul>
-  <li>Dependency injection (DI)</li>
-  <li>Logging</li>
-  <li>Configuration</li>
-  <li>IHostedService implementations</li>
-</ul> 
-
-if you look at the source code of `CreateDefaultBuilder`, you will see how appsetting.json values read and represented as `IConfiguration`,  a `ServiceCollection` is created and some runtime required services are registered in this service collection (for example, `IConfiguration` is registered as Singleton in this service collection that's why we can inject `IConfiguration` whenever we want) and this service collection will be further passed to the startup's `ConfigureServices` method.
-
-#### What is the purpose of Startup.cs
+#### What is the Purpose of Startup.cs
 
 The ASP.NET Core platform creates three objects when it receives an HTTP request: 
 
@@ -50,12 +24,11 @@ public class Startup {
          app.UseDeveloperExceptionPage();
       }
 
-      // add a middleware delegate defined in-line to the application's request pipeline.
-      app.Use(async (context, next) => {   // next is Func<Task>
+      app.Use(async (context, next) => {   // next is Func<Task>, not RequestDelegate <------------------------------------------------------------------------------
          if (context.Request.Method == HttpMethods.Get && context.Request.Query["custom"] == "true") {
             await context.Response.WriteAsync("Custom Middleware \n");
          }
-        await next();   // compiler will do `next(context);` for you
+        await next();   // compiler will do `next(context);` for you <------------------------------------------------------------------------------------------------
       });
 
       app.UseRouting();                 // use EndpointRoutingMiddleware middleware internally (UseRouting is just an extension method)
@@ -74,6 +47,7 @@ public class SecretEndpoint {
    }
 }
 ```
+
 `UseRouting`: Matches request to an endpoint (in runtime when a request comes in).
 
 `UseEndpoints`: Register endpoints (when application starts, before the first request comes in) and execute the matched endpoint (in runtime when a request comes in).
@@ -96,7 +70,7 @@ app.UseEndpoints(endpoints => {   // use EndpointMiddleware middleware internall
    endpoints.MapGet("/secret", SecretEndpoint.Endpoint);
 });
 ```
-if you run the application by debugging, you will see the debuggerOne only breaks once (that's how `endpoints.MapGet` executes onece to register endpoints), but debuggerTwo runs every time for a new request, which is executed by EndpointMiddleware middleware, you get the idea when you look at the source code.
+if you run the application by debugging, you will see the debuggerOne only breaks once (that's how `endpoints.MapGet` executes onece to register endpoints), but debuggerTwo runs every time for a new request (of course, the url need to match "/", which means when the application starts by default), which is executed by EndpointMiddleware middleware, you get the idea when you look at the source code.
 
 The reason of why the word `Endpoint` is chosen is because `End` means it is the last point that the request can go, for example, if you do:
 
@@ -280,12 +254,19 @@ branch.Use(async (context, next) => {
    await context.Response.WriteAsync($"Last Middleware");
 });
 
+public static class UseExtensions 
+{
+   public static IApplicationBuilder Use(this IApplicationBuilder app, Func<HttpContext, Func<Task>, Task> middleware);
+}
+//----------------------------------
+
 // Version Two:
 branch.Run(async (context) => {   // since you don't call next() in terminal middleware, so you uses another signature of method that doesn't receive next
    await context.Response.WriteAsync($"Last Middleware");
 });
 
-public static class RunExtensions {
+public static class RunExtensions 
+{
    // add a terminal middleware delegate to the application's request pipeline.
    public static void Run(this IApplicationBuilder app, RequestDelegate handler);
 }
@@ -371,7 +352,7 @@ public class ApplicationBuilder : IApplicationBuilder {
       }
    }
 
-   public IDictionary<string, object?> Properties { get; }
+   public IDictionary<string, object?> Properties { get; }   // can be used to store IEndpointRouteBuilder instance
 
    public IServiceProvider ApplicationServices {
       get {
@@ -450,8 +431,9 @@ public static class UseMiddlewareExtensions {
 
    public static IApplicationBuilder UseMiddleware(this IApplicationBuilder app, Type middleware, params object?[] args) {
       //...
-      var applicationServices = app.ApplicationServices;
-      return app.Use(next => {
+      var applicationServices = app.ApplicationServices;  // return an IServiceProvider
+
+      return app.Use(next => {   // next will be the RequestDelegate passed from previous pipe
          //...
          //var invokeMethods = methods.Where(m => string.Equals(m.Name, InvokeMethodName, ...).ToArray();
          if (invokeMethods.Length != 1) {
@@ -464,10 +446,14 @@ public static class UseMiddlewareExtensions {
          // not sure why there is no such an interface for non async middleware.
 
          var ctorArgs = new object[args.Length + 1];
-         ctorArgs[0] = next;
+         
+         // assign the delegate to the argument that passed to the middleware below, that's why sometimes you don't need to pass "next" ReuqestDelegate when using middleare
+         // e.g builder.UseMiddleware<EndpointMiddleware>() as ActivatorUtilities.CreateInstance will provide everything it needs
+         ctorArgs[0] = next;  // <------------------------------------------------------------------------------------ 
          Array.Copy(args, 0, ctorArgs, 1, args.Length);
-         // create an instance of the middleware at runtime
-         var instance = ActivatorUtilities.CreateInstance(app.ApplicationServices, middleware, ctorArgs);
+
+         // create an instance of the TMiddleware at runtime
+         var instance = ActivatorUtilities.CreateInstance(app.ApplicationServices, middleware, ctorArgs);   // note that we pass as I ServiceProvider created in HostBuilder
          //...
          return context => {
             //... need to grasp Expression and understand this part
@@ -642,7 +628,7 @@ Func<RequestDelegate, RequestDelegate> newNameFunc = (next) => { return context 
 Func<RequestDelegate, RequestDelegate> newByeFunc  = (next) => { return context => byeFunc(context, next) };
 ```
 
-When `ApplicationBuilder.Build()` is called, a RequestDelegate (`app`, let's call it `dummyApp`) is created:
+When `ApplicationBuilder.Build()` is called, a RequestDelegate (let's call it `dummyApp`) is created:
 ```C#
 RequestDelegate fromNewByeFunc = newByeFunc(dummyApp);
 // fromNewByeFunc is (context) => byeFunc(context, dummyApp)
