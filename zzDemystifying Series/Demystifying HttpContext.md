@@ -4,7 +4,7 @@ Demystifying HttpContext
 ```C#
 //-------------------------------V
 public abstract class HttpContext {   // namespace Microsoft.AspNetCore.Http
-   ...
+   // ...
    public abstract HttpRequest Request { get; }
    public abstract HttpResponse Response { get; }
    public abstract ConnectionInfo Connection { get; }

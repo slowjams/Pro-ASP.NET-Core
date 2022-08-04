@@ -252,7 +252,7 @@ internal abstract class Matcher
 internal sealed class DfaMatcher : Matcher   
 {
    // ...
-   private readonly EndpointSelector _selector;
+   private readonly EndpointSelector _selector;   // <-----------------
 
    public sealed override Task MatchAsync(HttpContext httpContext)  // <------------------a4
    {  
@@ -352,8 +352,8 @@ internal sealed class DefaultEndpointSelector : EndpointSelector {
          case 1: {
             ref var state = ref candidateState[0];
             if (CandidateSet.IsValidCandidate(ref state)) {
-               httpContext.SetEndpoint(state.Endpoint);  // <-------------- associate HttpContext with an endpoint
-               httpContext.Request.RouteValues = state.Values!;
+               httpContext.SetEndpoint(state.Endpoint);            // <-------------- associate HttpContext with an endpoint
+               httpContext.Request.RouteValues = state.Values;    // <--------------  setup RouteValues
             }
             break;
          }
@@ -1463,7 +1463,80 @@ public static class EndpointRouteBuilderExtensions
       endpointBuilder.DataSources.Add(endpointDatasource);
       return endpointDatasource.AddRoute(name, pattern, defaults, constraints, dataTokens);
    }
+
+   // you can see that the purpose of these two extension methods, same as `MapControllers()`, `MapDefaultControllerRoute()` is just to use DI to resolve the 
+   // EndpointDataSource (ControllerActionEndpointDataSource) and assocaite it to `IEndpointRouteBuilder`, so when it is passed as an argument to EndpointRoutingMiddleware,
+   // it can retireve the EndpointDataSource
 }
+```
+
+**Prerequisite**-`RouteAttribute`, `HttpMethodAttribute` and `IRouteTemplateProvider`
+
+```C#
+//-------------------------------------V
+public interface IRouteTemplateProvider
+{
+   string Name { get; }
+   string Template { get; }
+   int? Order { get; }
+}
+
+public class RouteAttribute : Attribute, IRouteTemplateProvider
+{
+   private int _order;
+
+   public RouteAttribute([StringSyntax("Route")] string template)
+   {
+      Template = template;
+   }
+
+   [StringSyntax("Route")]
+   public string Template { get; }
+  
+   public int Order
+   {
+      get { return _order ?? 0; }
+      set { _order = value; }
+   }
+ 
+   int IRouteTemplateProvider.Order => _order;
+ 
+   public string Name { get; set; }
+}
+
+public class HttpGetAttribute : HttpMethodAttribute
+{
+   private static readonly IEnumerable<string> _supportedMethods = new[] { "GET" };
+   public HttpGetAttribute() : base (_supportedMethods) { }
+   public HttpGetAttribute([StringSyntax("Route")] string template) : base(_supportedMethods, template) { }   // template is e.g "{id}"
+}
+
+public abstract class HttpMethodAttribute : Attribute, IRouteTemplateProvider
+{
+   private readonly List<string> _httpMethods;
+   private int _order;
+
+   public HttpMethodAttribute(IEnumerable<string> httpMethods, string template)
+   {
+      _httpMethods = httpMethods.ToList();
+       Template = template;
+   }
+   
+   public IEnumerable<string> HttpMethods => _httpMethods;
+
+   //
+   public int Order
+   {
+      get { return _order ?? 0; }
+      set { _order = value; }
+   }
+
+   public string Name { get; set; }
+
+   int IRouteTemplateProvider.Order => _order;
+   //
+}
+//-------------------------------------Ʌ
 ```
 
 **Part A**-`ActionDescriptor`
@@ -1494,53 +1567,12 @@ public interface IActionDescriptorProvider
 }
 //---------------------------Ʌ
 
-//-------------------------------------V
-public interface IRouteTemplateProvider
-{
-   string Name { get; }
-   string Template { get; }
-   int? Order { get; }
-}
-
-public class HttpGetAttribute : HttpMethodAttribute
-{
-   private static readonly IEnumerable<string> _supportedMethods = new[] { "GET" };
-   public HttpGetAttribute() : base (_supportedMethods) { }
-   public HttpGetAttribute(string template) : base(_supportedMethods, template) { }
-}
-
-public abstract class HttpMethodAttribute : Attribute, IRouteTemplateProvider
-{
-   private readonly List<string> _httpMethods;
-   private int _order;
-
-   public HttpMethodAttribute(IEnumerable<string> httpMethods, string template)
-   {
-      _httpMethods = httpMethods.ToList();
-       Template = template;
-   }
-   
-   public IEnumerable<string> HttpMethods => _httpMethods;
-
-   //
-   public int Order
-   {
-      get { return _order ?? 0; }
-      set { _order = value; }
-   }
-
-   public string Name { get; set; }
-
-   int IRouteTemplateProvider.Order => _order;
-   //
-}
-//-------------------------------------Ʌ
-
 //---------------------------------------------V
 public class ControllerActionDescriptorProvider : IActionDescriptorProvider
 {
    private readonly Lazy<IEnumerable<ActionDescriptor>> _accessor;
    public IEnumerable<ActionDescriptor> ActionDescriptors => _accessor.Value;
+
    public ControllerActionDescriptorProvider(IHostEnvironment environment)
    {
       _accessor = new Lazy<IEnumerable<ActionDescriptor>>(() => GetActionDescriptors(environment.ApplicationName));
@@ -1557,7 +1589,7 @@ public class ControllerActionDescriptorProvider : IActionDescriptorProvider
          if (type.Name.EndsWith("Controller"))
          {
             string controllerName = type.Name.Substring(0, type.Name.Length - "Controller".Length);
-            foreach (var method in type.GetMethods())
+            foreach (var method in type.GetMethods())   // just for simplicity here, should filter out [NonAction] methods
             {
                yield return CreateActionDescriptor(method, type, controllerName);
             }
@@ -1592,11 +1624,12 @@ public class ControllerActionDescriptorProvider : IActionDescriptorProvider
          };
       }
 
-      return new ControllerActionDescriptor
-      {
+      // convention routing
+      return new ControllerActionDescriptor  
+      {                                        
          ControllerType = controllerType,
          Method = method,
-         RouteValues = new Dictionary<string, string>
+         RouteValues = new Dictionary<string, string>   // <---------------------
          {
             ["controller"] = controllerName,
             ["action"] = actionName
@@ -1615,8 +1648,8 @@ public class DefaultActionDescriptorCollectionProvider : IActionDescriptorCollec
    private readonly Lazy<IReadOnlyList<ActionDescriptor>> _accessor;
    public IReadOnlyList<ActionDescriptor> ActionDescriptors => _accessor.Value;
 
-   public DefaultActionDescriptorCollectionProvider(IEnumerable<IActionDescriptorProvider> providers)
-   {
+   public DefaultActionDescriptorCollectionProvider(IEnumerable<IActionDescriptorProvider> providers)   // DI, so DefaultActionDescriptorCollectionProvider is just a wrapper
+   {                                                                                                    // of ControllerActionDescriptorProvider
       _accessor = new Lazy<IReadOnlyList<ActionDescriptor>>(() => providers.SelectMany(it => it.ActionDescriptors).ToList());
    }
 }
@@ -1626,9 +1659,21 @@ public class DefaultActionDescriptorCollectionProvider : IActionDescriptorCollec
 **Part B**
 
 ```C#
+//------------------------------------------------V
 public interface IEndpointConventionBuilder 
 {  
    void Add(Action<EndpointBuilder> convention);
+}
+
+public abstract class EndpointBuilder 
+{ 
+   public RequestDelegate RequestDelegate { get; set; }
+
+   public string DisplayName { get; set; }
+
+   public IList<object> Metadata { get; } = new List<object>();
+   
+   public abstract Endpoint Build();
 }
 
 public class ControllerActionEndpointConventionBuilder : IEndpointConventionBuilder
@@ -1642,6 +1687,7 @@ public class ControllerActionEndpointConventionBuilder : IEndpointConventionBuil
 
     public void Add(Action<EndpointBuilder> convention) => _conventions.Add(convention);
 }
+//------------------------------------------------Ʌ
 
 //------------------------------------------------V
 public abstract class EndpointDataSource 
@@ -1651,6 +1697,7 @@ public abstract class EndpointDataSource
    // ...
 }
 
+//------------------------------------------------V
 public abstract class ActionEndpointDataSourceBase : EndpointDataSource
 {
    private readonly Lazy<IReadOnlyList<Endpoint>> _endpointsAccessor;
@@ -1666,10 +1713,9 @@ public abstract class ActionEndpointDataSourceBase : EndpointDataSource
    public override IChangeToken GetChangeToken() => NullChangeToken.Instance;
    protected abstract List<Endpoint> CreateEndpoints(IReadOnlyList<ActionDescriptor> actions, IReadOnlyList<Action<EndpointBuilder>> conventions);
 }
-//------------------------------------------------Ʌ
 
 //---------------------------------------------V
-public class ControllerActionEndpointDataSource : ActionEndpointDataSourceBase
+public class ControllerActionEndpointDataSource : ActionEndpointDataSourceBase   // this is the one that get stored at IEndpointRouteBuilder.DataSources
 {
    private readonly List<ConventionalRouteEntry> _conventionalRoutes;
    private int _order;
@@ -1686,23 +1732,23 @@ public class ControllerActionEndpointDataSource : ActionEndpointDataSourceBase
       DefaultBuilder = new ControllerActionEndpointConventionBuilder(base.Conventions);
    }
 
-   public ControllerActionEndpointConventionBuilder AddRoute(string routeName, 
+   public ControllerActionEndpointConventionBuilder AddRoute(string routeName,    
                                                              string pattern, 
                                                              RouteValueDictionary defaults, 
                                                              IDictionary<string, object> constraints,     
                                                              RouteValueDictionary dataTokens)
    {
       List<Action<EndpointBuilder>> conventions = new List<Action<EndpointBuilder>>();
-      order++;
-      _conventionalRoutes.Add(new ConventionalRouteEntry(routeName, pattern, defaults,constraints, dataTokens, _order, conventions));
+      _order++;
+      _conventionalRoutes.Add(new ConventionalRouteEntry(routeName, pattern, defaults,constraints, dataTokens, _order, conventions));  // <----------------------
       return new ControllerActionEndpointConventionBuilder(conventions);
    }
-
-   protected override List<Endpoint> CreateEndpoints(IReadOnlyList<ActionDescriptor> actions, IReadOnlyList<Action<EndpointBuilder>> conventions)
+                                                                                              // conventions not being used here, need to check the source code again
+   protected override List<Endpoint> CreateEndpoints(IReadOnlyList<ActionDescriptor> actions, IReadOnlyList<Action<EndpointBuilder>> conventions) 
    {
       var endpoints = new List<Endpoint>();
 
-      foreach (ActionDescriptor action in actions)
+      foreach (ActionDescriptor action in actions) 
       {
          var attributeInfo = action.AttributeRouteInfo;
          if (attributeInfo == null)   // convention routing
@@ -1712,13 +1758,13 @@ public class ControllerActionEndpointDataSource : ActionEndpointDataSourceBase
                RoutePattern pattern = _routePatternTransformer.SubstituteRequiredValues(route.Pattern, action.RouteValues);
                if (pattern != null)
                {
-                  var builder = new RouteEndpointBuilder(_requestDelegate, pattern, route.Order);
+                  var builder = new RouteEndpointBuilder(_requestDelegate, pattern, route.Order);   // _requestDelegate is NOT the action method
                   builder.Metadata.Add(action);
                   endpoints.Add(builder.Build());
                }
             }
          }
-         else  // convention routing
+         else  // attribute routing
          {
             RoutePattern original = RoutePatternFactory.Parse(attributeInfo.Template);
             RoutePattern pattern = _routePatternTransformer.SubstituteRequiredValues(original, action.RouteValues);
@@ -1734,21 +1780,25 @@ public class ControllerActionEndpointDataSource : ActionEndpointDataSourceBase
       return endpoints;
    }
 
-   private Task ProcessRequestAsync(HttpContext httContext)
-   {
-      var endpoint = httContext.GetEndpoint();
+   private Task ProcessRequestAsync(HttpContext httContext)  // <------------------ every Endpoint instance has the same RequestDelegate points to this method, i.e  all Endpoints
+   {                                                         // associated with a EndpointDataSource and those Endpoint's RequestDelegate point to EndpointDataSource's this method
+      var endpoint = httContext.GetEndpoint();               // so this RequestDelegate (ProcessRequestAsync) is more like a placeholder RequestDelegate
       var actionDescriptor = endpoint.Metadata.GetMetadata<ActionDescriptor>();
-      var actionContext = new ActionContext
+
+      //---------------------------------------------------------------------------------------------------------------------------------------<<<<<
+      var actionContext = new ActionContext    // <----------------------------------------------- now you see when ActionContext is created :)
       {
-         ActionDescriptor = actionDescriptor,
+         ActionDescriptor = actionDescriptor,        
          HttpContext = httContext
       };
+      //----------------------------------------------------------------------------------------------------------------------------------------<<<<<
 
       var invokerFactory = httContext.RequestServices.GetRequiredService<IActionInvokerFactory>();
       IActionInvoker invoker = invokerFactory.CreateInvoker(actionContext);
 
       return invoker.InvokeAsync();
    }
+   // note that above method to create a RequestDelegate is just an simple rewrite, check MvcRouteHandler (before asp.nete core2.2) for details
 }
 //---------------------------------------------Ʌ
 
@@ -1800,13 +1850,15 @@ public interface IActionInvokerFactory
 
 public class ActionInvokerFactory : IActionInvokerFactory
 {
-    public IActionInvoker CreateInvoker(ActionContext actionContext) => new ControllerActionInvoker(actionContext);
+   public IActionInvoker CreateInvoker(ActionContext actionContext) => new ControllerActionInvoker(actionContext); 
 }
 
 public class ControllerActionInvoker : IActionInvoker
 {
    public ActionContext ActionContext { get; }
-   public ControllerActionInvoker(ActionContext actionContext) => ActionContext = actionContext;
+
+   public ControllerActionInvoker(ActionContext actionContext) => ActionContext = actionContext;  // ControllerActionInvoker receives ActionContext
+   
    public Task InvokeAsync()
    {
       var actionDescriptor = (ControllerActionDescriptor)ActionContext.ActionDescriptor;
@@ -1816,18 +1868,16 @@ public class ControllerActionInvoker : IActionInvoker
       
       if (controllerInstance is Controller controller)
       {
-         controller.ActionContext = ActionContext;
+         controller.ActionContext = ActionContext;   // <--------------------------- assign ActionContext to the controller instance
       }
 
       var actionMethod = actionDescriptor.Method;
       var result = actionMethod.Invoke(controllerInstance, new object[0]);
         
       return result is Task task ? task : Task.CompletedTask;
-    }
+   }
 }
 ```
-
-
 
 <!-- <div class="alert alert-info p-1" role="alert">
     

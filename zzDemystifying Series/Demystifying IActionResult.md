@@ -329,11 +329,11 @@ public abstract class ControllerBase   // a base class for an MVC controller wit
    private IUrlHelper _url;
    private ProblemDetailsFactory _problemDetailsFactory;
 
-   public HttpContext HttpContext => ControllerContext.HttpContext;
+   public HttpContext HttpContext => ControllerContext.HttpContext;  // <----------------------
 
    public HttpResponse Response => HttpContext?.Response!;
 
-   public RouteData RouteData => ControllerContext.RouteData;
+   public RouteData RouteData => ControllerContext.RouteData;    
 
    public ModelStateDictionary ModelState => ControllerContext.ModelState;
 
@@ -425,7 +425,7 @@ public abstract class ControllerBase   // a base class for an MVC controller wit
       }
    }
 
-   public ClaimsPrincipal User => HttpContext?.User!;
+   public ClaimsPrincipal User => HttpContext.User;
 
    [NonAction]
    public virtual StatusCodeResult StatusCode([ActionResultStatusCode] int statusCode) => new StatusCodeResult(statusCode);
@@ -548,14 +548,18 @@ public class ControllerContext : ActionContext {   // the context associated wit
 Executor:
 
 ```C#
-//-------------------------------------------------------------------------------------------hfgfgfgfgfgfgfgfgfgfgfgfgf
+//-------------------------------------------------------------------------------------------
 public interface IActionResultExecutor<in TResult> where TResult : notnull, IActionResult {
    Task ExecuteAsync(ActionContext context, TResult result);
 }
 
 public class ObjectResultExecutor : IActionResultExecutor<ObjectResult> 
 {
-
+   // ...
+   public virtual Task ExecuteAsync(ActionContext context, ObjectResult result)
+   {
+      // ... serilize result.Value and write it to the output
+   }
 }
 //------------------------------------------------------------------------------------------
 ```
@@ -679,9 +683,10 @@ public class HomeController : Controller
    {
       context = ctx;
    }
+
    public async Task<IActionResult> Index(long id = 1)
    {
-      return View(await context.Products.FindAsync(id));
+      return View(await context.Products.FindAsync(id));   // <------------------------ 1
    }
 }
 ```
@@ -698,6 +703,10 @@ public abstract class Controller : ControllerBase, IActionFilter, IFilterMetadat
    public ViewDataDictionary ViewData
    {
       get {
+         if (_viewData == null)
+         {
+            _viewData = new ViewDataDictionary(new EmptyModelMetadataProvider(), ControllerContext.ModelState);
+         }
          return _viewData!;
       }
 
@@ -723,11 +732,11 @@ public abstract class Controller : ControllerBase, IActionFilter, IFilterMetadat
       }
    }
 
-   public dynamic ViewBag
+   public dynamic ViewBag   // <------ ViewBag is similiar to ViewData (ViewData["Foo"] VS ViewBag.Foo)
    {
       get {
          if (_viewBag == null)
-            _viewBag = new DynamicViewData(() => ViewData);
+            _viewBag = new DynamicViewData(() => ViewData);   // <------------ this shows viewbag is part of ViewData as above shows
          
          return _viewBag;
       }
@@ -752,7 +761,7 @@ public abstract class Controller : ControllerBase, IActionFilter, IFilterMetadat
    }
 
    [NonAction]
-   public virtual ViewResult View(string viewName, object model)
+   public virtual ViewResult View(string viewName, object model)   // <------------------------ 2
    {
       ViewData.Model = model;
 
@@ -865,19 +874,10 @@ public class ViewResult : ActionResult, IStatusCodeActionResult
 
    public string ContentType { get; set; }
 
-   public override async Task ExecuteResultAsync(ActionContext context)
+   public override async Task ExecuteResultAsync(ActionContext context)   // <------------------ 3, will be invoked by ControllerActionInvoker
    {
-      var executor = context.HttpContext.RequestServices.GetService<IActionResultExecutor<ViewResult>>();
-
-      if (executor == null)
-      {
-         throw new InvalidOperationException(Mvc.Core.Resources.FormatUnableToFindServices(
-            nameof(IServiceCollection),
-            "AddControllersWithViews()",
-            "ConfigureServices(...)"));
-      }
-
-      await executor.ExecuteAsync(context, this);
+      var executor = context.HttpContext.RequestServices.GetService<IActionResultExecutor<ViewResult>>(); 
+      await executor.ExecuteAsync(context, this);   // <-------------------- this is important
    }
 }
 //---------------------Ʌ
@@ -885,7 +885,7 @@ public class ViewResult : ActionResult, IStatusCodeActionResult
 
 Razor views are converted into C# classes that inherit from the `RazorPage` class:
 
-```html
+```HTML
 <!DOCTYPE html>
 <html>
 <head>
@@ -912,6 +912,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc.Rendering;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
+
 namespace AspNetCore
 {
    public class Views_Home_Watersports : RazorPage<dynamic>
@@ -941,17 +942,83 @@ namespace AspNetCore
       public IModelExpressionProvider ModelExpressionProvider { get; private set; }
    }
 }
+```
 
+```C#
 public interface IRazorPage
 {
-   // jhjhjhjhjh
+   ViewContext ViewContext { get; set; }
+   IHtmlContent BodyContent { get; set; }
+   bool IsLayoutBeingRendered { get; set; }
+   string Path { get; set; }
+   string Layout { get; set; }
+   IDictionary<string, RenderAsyncDelegate> PreviousSectionWriters { get; set; }
+   IDictionary<string, RenderAsyncDelegate> SectionWriters { get; }
+   void EnsureRenderedBodyOrSections();   
+   Task ExecuteAsync();   // <-------------------------------------------- render the page and writes the output to the ViewContext.Writer
 }
 
 public abstract class RazorPageBase : IRazorPage
 {
+   private StringWriter _valueBuffer;
+   private TextWriter _pageWriter;
+   private ITagHelperFactory _tagHelperFactory;
+   private AttributeInfo _attributeInfo;
+   private TagHelperAttributeInfo _tagHelperAttributeInfo;
+   private IUrlHelper _urlHelper;
+   // ...
+
+   public virtual ViewContext ViewContext { get; set; } = default;
+   public HtmlEncoder HtmlEncoder { get; set; } = default;
+   public virtual TextWriter Output { get; set; }  // viewContext.Writer
+   public string Path { get; set; } = default;
+   public IHtmlContent BodyContent { get; set; }
+
    public string Layout { get; set; }
-   
-   protected virtual IHtmlContent RenderBody();
+   public dynamic ViewBag => ViewContext.ViewBag;  // <----------------------------------
+   public ITempDataDictionary TempData => ViewContext.TempData;
+  
+   public virtual void WriteLiteral(string value) => Output.Write(value);
+   public virtual void Write(string value)
+   {
+      var writer = Output;
+      var encoder = HtmlEncoder;
+      var encoded = encoder.Encode(value);
+      writer.Write(encoded);
+   }
+
+   // ...
+   public abstract Task ExecuteAsync(); 
+}
+
+//---------------------------------------------V
+public abstract class RazorPage : RazorPageBase
+{
+   private readonly HashSet<string> _renderedSections = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+   private bool _renderedBody;
+   private bool _ignoreBody;
+   private HashSet<string>? _ignoredSections;
+
+   public HttpContext Context => ViewContext.HttpContext;
+
+   protected virtual IHtmlContent RenderBody()
+   {
+      _renderedBody = true;
+      return BodyContent;
+   }
+
+   public void IgnoreBody()
+   {
+      _ignoreBody = true;
+   }
+
+   public HtmlString RenderSection(string name)
+   {
+      return RenderSection(name, required: true);
+   }
+
+   public Task<HtmlString> RenderSectionAsync(string name, bool required);
+   // ...
 }
 
 public abstract class RazorPage<TModel> : RazorPage
@@ -961,20 +1028,46 @@ public abstract class RazorPage<TModel> : RazorPage
    [RazorInject]
    public ViewDataDictionary<TModel> ViewData { get; set; } = default;
 }
-
-public abstract class RazorPage : RazorPageBase
-{
-   // dfdgfjdfjdfhdjfhjhh
-}
+//---------------------------------------------Ʌ
 ```
 
 ```C#
-//--------------V
-public interface IActionResultExecutor<TResult> where TResult : IActionResult 
+//----------------------V
+public class ViewContext : ActionContext
 {
-   Task ExecuteAsync(ActionContext context, TResult result);
-}
+   private FormContext _formContext = default;
+   private DynamicViewData _viewBag;
+   private Dictionary<object, object> _items = default;
 
+   public ViewContext(ActionContext actionContext, IView view, ViewDataDictionary viewData, ITempDataDictionary tempData,
+                      TextWriter writer, HtmlHelperOptions htmlHelperOptions) : base(actionContext)
+   {
+      View = view;
+      ViewData = viewData;
+      TempData = tempData;
+      Writer = writer;
+ 
+      FormContext = new FormContext();
+
+      ClientValidationEnabled = htmlHelperOptions.ClientValidationEnabled;
+      Html5DateRenderingMode = htmlHelperOptions.Html5DateRenderingMode;
+      ValidationSummaryMessageElement = htmlHelperOptions.ValidationSummaryMessageElement;
+      ValidationMessageElement = htmlHelperOptions.ValidationMessageElement;
+      CheckBoxHiddenInputRenderMode = htmlHelperOptions.CheckBoxHiddenInputRenderMode;
+   }
+
+   public ViewDataDictionary ViewData { get; set; }
+   public ITempDataDictionary TempData { get; set; }
+   public dynamic ViewBag { get; set; }
+   public IView View { get; set; }
+
+   // ...
+}
+//----------------------Ʌ
+```
+
+```C#
+//-----------------------V
 public class ViewExecutor
 {
    public static readonly string DefaultContentType = "text/html; charset=utf-8";
@@ -1002,9 +1095,10 @@ public class ViewExecutor
 
    public virtual async Task ExecuteAsync(ActionContext actionContext, IView view, ViewDataDictionary viewData, ITempDataDictionary tempData, string contentType, int statusCode) 
    {
-      var viewContext = new ViewContext(actionContext, view, viewData, tempData, TextWriter.Null, ViewOptions.HtmlHelperOptions);
+      var viewContext = new ViewContext(actionContext, view, viewData, tempData, 
+                                        TextWriter.Null, ViewOptions.HtmlHelperOptions);  // <------------- this is when ViewContext is created
  
-      await ExecuteAsync(viewContext, contentType, statusCode);
+      await ExecuteAsync(viewContext, contentType, statusCode);    // <----------------------- 4.2
    }
 
    protected async Task ExecuteAsync(ViewContext viewContext, string contentType, int statusCode)
@@ -1039,7 +1133,7 @@ public class ViewExecutor
  
             DiagnosticListener.BeforeView(view, viewContext);
  
-            await view.RenderAsync(viewContext);
+            await view.RenderAsync(viewContext);  // <--------------------------------------- 4.3.
  
             DiagnosticListener.AfterView(view, viewContext);
          }
@@ -1064,7 +1158,14 @@ public class ViewExecutor
       }
    }
 }
+//-----------------------ɅV
 
+public interface IActionResultExecutor<TResult> where TResult : IActionResult 
+{
+   Task ExecuteAsync(ActionContext context, TResult result);
+}
+
+//-------------------------------------V
 public partial class ViewResultExecutor : ViewExecutor, IActionResultExecutor<ViewResult>
 {
    private const string ActionNameKey = "action";
@@ -1072,7 +1173,7 @@ public partial class ViewResultExecutor : ViewExecutor, IActionResultExecutor<Vi
    public ViewResultExecutor(
       IOptions<MvcViewOptions> viewOptions,
       IHttpResponseStreamWriterFactory writerFactory,
-      ICompositeViewEngine viewEngine,
+      ICompositeViewEngine viewEngine,    // <-------------------- RazorViewEngine is injected
       ITempDataDictionaryFactory tempDataFactory,
       DiagnosticListener diagnosticListener,
       ILoggerFactory loggerFactory,
@@ -1128,22 +1229,6 @@ public partial class ViewResultExecutor : ViewExecutor, IActionResultExecutor<Vi
       return result;
    }
 
-   // ...
-
-   public async Task ExecuteAsync(ActionContext context, ViewResult result)
-   {
-      var stopwatch = ValueStopwatch.StartNew();
-
-      var viewEngineResult = FindView(context, result);
-      viewEngineResult.EnsureSuccessful(originalLocations: null);
-
-      var view = viewEngineResult.View;
-      using (view as IDisposable)
-      {
-         await ExecuteAsync(context, view, result.ViewData, result.TempData, result.ContentType, result.StatusCode);
-      }
-   }
-
    private static string GetActionName(ActionContext context)
    {
       if (!context.RouteData.Values.TryGetValue(ActionNameKey, out var routeValue))
@@ -1164,11 +1249,25 @@ public partial class ViewResultExecutor : ViewExecutor, IActionResultExecutor<Vi
  
       return stringRouteValue;
    }
+   // ...
+
+   public async Task ExecuteAsync(ActionContext context, ViewResult result)   // <----------------------- 4.1
+   {
+      var stopwatch = ValueStopwatch.StartNew();
+
+      var viewEngineResult = FindView(context, result);
+      viewEngineResult.EnsureSuccessful(originalLocations: null);
+
+      IView view = viewEngineResult.View;
+      using (view as IDisposable)
+      {
+         await ExecuteAsync(context, view, result.ViewData, result.TempData, result.ContentType, result.StatusCode);   // <-----4.1 calling base class ViewExecutor.ExecuteAsync()
+      }
+   }
 }
-//--------------Ʌ
+//-------------------------------------Ʌ
 
-
-//--------------V
+//--------------------------V
 public interface IViewEngine
 {
    ViewEngineResult FindView(ActionContext context, string viewName, bool isMainPage);
@@ -1181,9 +1280,9 @@ public interface IRazorViewEngine : IViewEngine
    RazorPageResult GetPage(string executingFilePath, string pagePath);
    string GetAbsolutePath(string? executingFilePath, string? pagePath);
 }
-//--------------Ʌ
+//--------------------------Ʌ
 
-//------------------V
+//----------------------------------V
 public partial class RazorViewEngine : IRazorViewEngine
 {
    public static readonly string ViewExtension = ".cshtml";
@@ -1295,11 +1394,25 @@ public partial class RazorViewEngine : IRazorViewEngine
       return CreateViewEngineResult(cacheResult, viewPath);
     }
 
+    private ViewEngineResult CreateViewEngineResult(ViewLocationCacheResult result, string viewName)
+    {
+       IRazorPage page = result.ViewEntry.PageFactory();  // <------------------------- get the compiled cshtml file
+       var viewStarts = new IRazorPage[result.ViewStartEntries!.Count];
+       for (var i = 0; i < viewStarts.Length; i++)
+       {
+          var viewStartItem = result.ViewStartEntries[i];
+          viewStarts[i] = viewStartItem.PageFactory();
+       }
+
+       RazorView view = new RazorView(this, _pageActivator, viewStarts, page, _htmlEncoder, _diagnosticListener);
+       
+       return ViewEngineResult.Found(viewName, view);
+    }
     // ...
 }
-//------------------Ʌ
+//----------------------------------Ʌ
 
-//----------V
+//---------------------------V
 public class ViewEngineResult
 {
    private ViewEngineResult(string viewName)
@@ -1349,65 +1462,77 @@ public class ViewEngineResult
       return this;
    }
 }
-//----------Ʌ
-```
+//---------------------------Ʌ
 
-------------------------------------------------------------------------------------------------------------------------
-
-**Razor View Engine**
-
-```C#
-public interface IViewEngine
+//--------------------V
+public interface IView
 {
-   ViewEngineResult FindView(ActionContext context, string viewName, bool isMainPage);
-   ViewEngineResult GetView(string executingFilePath, string viewPath, bool isMainPage);
+   string Path { get; }
+   Task RenderAsync(ViewContext context);
 }
 
-public interface IRazorViewEngine : IViewEngine
+public class RazorView : IView
 {
-   RazorPageResult FindPage(ActionContext context, string pageName);
-   RazorPageResult GetPage(string executingFilePath, string pagePath);
-   string GetAbsolutePath(string? executingFilePath, string? pagePath);
-}
-
-//----------------------------------V
-public partial class RazorViewEngine : IRazorViewEngine
-{
-   public static readonly string ViewExtension = ".cshtml";
-   private const string AreaKey = "area";
-   private const string ControllerKey = "controller";
-   private const string PageKey = "page";
-
-   private static readonly TimeSpan _cacheExpirationDuration = TimeSpan.FromMinutes(20);
-
-   private readonly IRazorPageFactoryProvider _pageFactory;
+   private readonly IRazorViewEngine _viewEngine;
    private readonly IRazorPageActivator _pageActivator;
    private readonly HtmlEncoder _htmlEncoder;
-   private readonly ILogger _logger;
-   private readonly RazorViewEngineOptions _options;
-   private readonly DiagnosticListener _diagnosticListener;
+   // ... 
 
-   public RazorViewEngine(
-        IRazorPageFactoryProvider pageFactory,
-        IRazorPageActivator pageActivator,
-        HtmlEncoder htmlEncoder,
-        IOptions<RazorViewEngineOptions> optionsAccessor,
-        ILoggerFactory loggerFactory,
-        DiagnosticListener diagnosticListener)
-   {
-      _options = optionsAccessor.Value;
-       _pageFactory = pageFactory;
+   public RazorView(IRazorViewEngine viewEngine, 
+                    IRazorPageActivator pageActivator,
+                    IReadOnlyList<IRazorPage> viewStartPages, 
+                    IRazorPage razorPage
+                    HtmlEncoder htmlEncoder,
+                    DiagnosticListener diagnosticListener) 
+   { 
+      _viewEngine = viewEngine;
       _pageActivator = pageActivator;
+      ViewStartPages = viewStartPages;
+      RazorPage = razorPage;
       _htmlEncoder = htmlEncoder;
-      _logger = loggerFactory.CreateLogger<RazorViewEngine>();
       _diagnosticListener = diagnosticListener;
-      ViewLookupCache = new MemoryCache(new MemoryCacheOptions());
    }
 
+   public string Path => RazorPage.Path;
 
-   // jkhgdfhgfkjldshfsdhfnsdjkhfjkldshfldsjhflksdjhflkjsdhfljkdsh
+   public IRazorPage RazorPage { get; }  // <--------------------- this is the compiled view file
+   
+   public IReadOnlyList<IRazorPage> ViewStartPages { get; }
+
+   // ...
+
+   public virtual async Task RenderAsync(ViewContext context)   // <--------------------------------------- 5
+   {
+      // ...
+      var bodyWriter = await RenderPageAsync(RazorPage, context, invokeViewStarts: true);
+      await RenderLayoutAsync(context, bodyWriter);
+   }
+
+   private async Task<ViewBufferTextWriter> RenderPageAsync(IRazorPage page, ViewContext context, bool invokeViewStarts)
+   {
+      // ...
+      await RenderViewStartsAsync(context);
+
+      await RenderPageCoreAsync(page, context);
+      // ...
+   }
+
+   private async Task RenderPageCoreAsync(IRazorPage page, ViewContext context)
+   {
+      page.ViewContext = context;   // <----------------------------
+      // ...
+      await page.ExecuteAsync();    // <--------------------------------------- 5.1
+   }
+
+   private async Task RenderViewStartsAsync(ViewContext context)
+   {
+      // ...
+
+      RazorPage.Layout = xxx;  // modify RazorPage instance
+   }
+   // ...
 }
-//----------------------------------Ʌ
+//--------------------Ʌ
 ```
 
 ## Demystifying ExecuteResultAsync Process
@@ -1539,6 +1664,257 @@ public class OkObjectResult : ObjectResult
 }
 //----------------------------------------------------------------Ʌ
 ```
+
+-------------------------------------------------------------------------------------------------
+
+## Build Your Own `IActionResult`
+
+```C#
+public static class ServiceCollectionExtensions
+{
+   public static IServiceCollection AddMvcControllers(this IServiceCollection services)
+   {
+      return services
+         .AddSingleton<IActionDescriptorCollectionProvider, DefaultActionDescriptorCollectionProvider>()
+         .AddSingleton<IActionInvokerFactory, ActionInvokerFactory>()
+         .AddSingleton <IActionDescriptorProvider, ControllerActionDescriptorProvider>()
+         .AddSingleton<ControllerActionEndpointDataSource, ControllerActionEndpointDataSource>()
+         .AddSingleton<IActionResultTypeMapper, ActionResultTypeMapper>();
+   }
+}
+
+public class FoobarController : Controller
+{
+   private static readonly string _html = @"<html>...<body><p>Hello World!</p></body></html>";
+
+   [HttpGet("/{foo}")]
+   public Task<IActionResult> FooAsync()
+   {
+      return Task.FromResult<IActionResult>(new ContentResult(_html, "text/html"));
+   }
+
+   [HttpGet("/bar")]
+   public ValueTask<ContentResult> BarAsync() 
+   {
+      return new ValueTask<ContentResult>(new ContentResult(_html, "text/html"));
+   }
+
+   [HttpGet("/baz")]
+   public Task<string> BazAsync() 
+   {
+      Task.FromResult(_html);
+   }
+
+   [HttpGet("/qux")]
+   public ValueTask<string> QuxAsync() 
+   {
+      new ValueTask<string>(_html);
+   }
+}
+```
+
+**Part A**
+
+```C#
+public interface IActionResult
+{
+   Task ExecuteResultAsync(ActionContext context);
+}
+
+public class ContentResult : IActionResult
+{
+   private readonly string _content;
+   private readonly string _contentType;
+
+   public ContentResult(string content, string contentType)
+   {
+      _content = content;
+       _contentType = contentType;
+   }
+
+   public Task ExecuteResultAsync(ActionContext context)
+   {
+      var response = context.HttpContext.Response;
+      response.ContentType = _contentType;
+      return response.WriteAsync(_content);
+   }
+}
+
+public sealed class NullActionResult : IActionResult
+{
+   private NullActionResult() { }
+   public static NullActionResult Instance { get; } = new NullActionResult();
+   public Task ExecuteResultAsync(ActionContext context) => Task.CompletedTask;
+}
+```
+
+**Part B**
+
+```C#
+public interface IActionInvoker
+{
+   Task InvokeAsync();
+}
+
+public class ControllerActionInvoker : IActionInvoker
+{
+   public ActionContext ActionContext { get; }
+
+   public ControllerActionInvoker(ActionContext actionContext) => ActionContext = actionContext;
+   
+   public Task InvokeAsync()
+   {
+      var actionDescriptor = (ControllerActionDescriptor)ActionContext.ActionDescriptor;
+      var controllerType = actionDescriptor.ControllerType;
+      var requestServies = ActionContext.HttpContext.RequestServices;
+      var controllerInstance = ActivatorUtilities.CreateInstance(requestServies, controllerType);
+      
+      if (controllerInstance is Controller controller)
+      {
+         controller.ActionContext = ActionContext;
+      }
+
+      var actionMethod = actionDescriptor.Method;
+
+      var result = actionMethod.Invoke(controllerInstance, new object[0]);
+
+      var actionResult = await ToActionResultAsync(result);
+
+      await actionResult.ExecuteResultAsync(ActionContext);
+   }
+}
+
+private async Task<IActionResult> ToActionResultAsync(object result)
+{
+   if (result == null)
+      return NullActionResult.Instance;
+   
+   if (result is Task<IActionResult> taskOfActionResult)
+      return await taskOfActionResult;
+
+   if (result is ValueTask<IActionResult> valueTaskOfActionResult)
+      return await valueTaskOfActionResult;
+
+   if (result is IActionResult actionResult)
+      return actionResult;
+
+   if (result is Task task)
+   {
+      await task;
+      return NullActionResult.Instance;
+   }
+
+   throw new InvalidOperationException("Action method's return value is invalid.");
+}
+```
+
+**Part C**
+
+return type can be any type:
+
+```C#
+public interface IActionResultTypeMapper
+{
+    IActionResult Convert(object value, Type returnType);
+}
+
+public class ActionResultTypeMapper : IActionResultTypeMapper
+{
+   public IActionResult Convert(object value, Type returnType)
+   {
+      new ContentResult(value.ToString(), "text/plain");
+   }
+}
+
+//----------------------------------V
+public class ControllerActionInvoker : IActionInvoker
+{
+   private static readonly MethodInfo _taskConvertMethod;
+   private static readonly MethodInfo _valueTaskConvertMethod;
+
+   static ControllerActionInvoker()
+   {
+      var bindingFlags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Static;
+      _taskConvertMethod = typeof(ControllerActionInvoker).GetMethod(nameof(ConvertFromTaskAsync), bindingFlags);
+      _valueTaskConvertMethod = typeof(ControllerActionInvoker).GetMethod(nameof(ConvertFromValueTaskAsync), bindingFlags);
+   }
+
+   private static async Task<IActionResult> ConvertFromTaskAsync<TValue>(Task<TValue> returnValue, IActionResultTypeMapper mapper)
+   {
+      var result = await returnValue;
+      return result is IActionResult actionResult ? actionResult : mapper.Convert(result, typeof(TValue));
+   }
+
+   private static async Task<IActionResult> ConvertFromValueTaskAsync<TValue>( ValueTask<TValue> returnValue, IActionResultTypeMapper mapper)
+   {
+      var result = await returnValue;
+      return result is IActionResult actionResult ? actionResult : mapper.Convert(result, typeof(TValue));
+   }
+
+   public async Task InvokeAsync()
+   {
+      var actionDescriptor = (ControllerActionDescriptor) ActionContext.ActionDescriptor;
+      var controllerType = actionDescriptor.ControllerType;
+      var requestServies = ActionContext.HttpContext.RequestServices;
+      var controllerInstance = ActivatorUtilities.CreateInstance(requestServies, controllerType);
+
+      if (controllerInstance is Controller controller)
+      {
+         controller.ActionContext = ActionContext;
+      }
+
+      var actionMethod = actionDescriptor.Method;
+      var returnValue = actionMethod.Invoke(controllerInstance, new object[0]);
+      var mapper = requestServies.GetRequiredService<IActionResultTypeMapper>();
+      var actionResult = await ToActionResultAsync(returnValue, actionMethod.ReturnType, mapper);
+
+      await actionResult.ExecuteResultAsync(ActionContext);
+   }
+
+   private Task<IActionResult> ToActionResultAsync(object returnValue, Type returnType, IActionResultTypeMapper mapper)
+   {
+       if (returnValue == null || returnType == typeof(Task) || returnType == typeof(ValueTask))
+          return Task.FromResult<IActionResult>(NullActionResult.Instance);
+
+       if (returnValue is IActionResult actionResult)
+          return Task.FromResult(actionResult);
+
+       if (returnType.IsGenericType && returnType.GetGenericTypeDefinition() == typeof(Task<>))
+       {
+          var declaredType = returnType.GenericTypeArguments.Single();
+          var taskOfResult = _taskConvertMethod.MakeGenericMethod(declaredType).Invoke(null, new object[] { returnValue, mapper });
+          return (Task<IActionResult>)taskOfResult;
+       }
+
+       if (returnType.IsGenericType && returnType.GetGenericTypeDefinition() == typeof(ValueTask<>))
+       {
+          var declaredType = returnType.GenericTypeArguments.Single();
+          var valueTaskOfResult = _valueTaskConvertMethod.MakeGenericMethod(declaredType).Invoke(null, new object[] { returnValue, mapper });
+          return (Task<IActionResult>)valueTaskOfResult;
+       }
+
+       return Task.FromResult(mapper.Convert(returnValue, returnType));
+   }
+}
+//----------------------------------Ʌ
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
