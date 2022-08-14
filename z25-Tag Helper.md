@@ -178,6 +178,44 @@ public class ModelRowTagHelper : TagHelper
 ```
 ---------------------------------------------------------------------------------------
 
+## Built-in TagHelper
+
+```HTML
+@model Product
+<input class="form-control" asp-for="Name" /> <!--translated into below -->
+<input class="form-control" type="text" id="Name" name="Name" value="Kayak">
+
+<form asp-action="submitform" method="post" id="htmlform">  <!--asp-controller attribute has not been used, so current controller is used -->
+    <div class="form-group">
+        <label>Name</label>
+        <input class="form-control" name="Name" value="@Model.Name" />  <!--translated into below -->    
+        <input class="form-control" asp-for="Name" />
+    </div>
+    <button type="submit" class="btn btn-primary">Submit</button>
+</form> <!--translated into below -->
+
+<form method="post" action="Home/Form/submitform" id="htmlform">...</form>
+```
+
+note that for Razor pages, you will need to specify `name` attribute explicitly as
+
+```C#
+<input class="form-control" type="text" asp-for="Product.Name" name="Name">  // need to specify name="Name"
+
+@functions {
+    public class FormHandlerModel : PageModel{
+        ...
+        public Product Product { get; set; }
+    }
+}
+
+// translated into
+<input class="form-control" type="text" id="Product_Name" name="Name" value="Kayak">
+
+// if you don't specify name="Name", it will be, which affect parameter model binding, but if you use [BindProperty] on Product property, then you don't need name="Name"
+<input class="form-control" type="text" id="Product_Name" name="Product.Name" value="Kayak">
+```
+
 **Source Code**
 
 ```C#
