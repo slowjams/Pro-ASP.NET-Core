@@ -23,6 +23,16 @@ public class Startup
       app.UseRouting();  // <---------------------------------A (select an endpint) using EndpointRoutingMiddleware
                          //EndpointRoutingMiddleware will associate the endpoint with HttpContext, it will also set HttpContext's RouteValueDictionary values
      
+      app.Use(async (context, next) => {
+         Endpoint end = context.GetEndpoint();
+         if (end != null) {
+            await context.Response.WriteAsync($"{end.DisplayName} Selected \n");
+         } else {
+            await context.Response.WriteAsync("No Endpoint Selected \n");
+         }
+         await next();
+      });
+  
       app.UseEndpoints(endpoints => {  // <------------------ B (register mapping and invoke endpoint), using EndpointRoutingMiddleware
          
          endpoints.MapGet("routing", async context => {    // endpoints is IEndpointRouteBuilder
@@ -200,7 +210,7 @@ internal sealed partial class EndpointRoutingMiddleware {   // <---------a3
       // matcher is DfaMatcher whose job is to associate an endpoint to a HttpContext (by analysing httpContext.Request.Path.Value) 
       // using a complex process to determine which endpoints to associate
       var matcher = _matcherFactory.CreateMatcher(_endpointDataSource);   // <---------------------- we pass IEndpointRouteBuilder.DataSources that contains RouteEndpointBuilder 
-                                                                          // which contains RequestDelegate and RoutePattern, so DfaMatcher can match it withHttpContext's URL
+                                                                          // which contains RequestDelegate and RoutePattern, so DfaMatcher can match it
 
      
       // call httpContext.SetEndpoint(candidate.Endpoint) when find a candicate
@@ -516,7 +526,7 @@ public class Endpoint {  // namespace Microsoft.AspNetCore.Http;
     public Endpoint(RequestDelegate? requestDelegate, EndpointMetadataCollection? metadata, string? displayName) {
        //...
     }
-    public string? DisplayName { get; }
+    public string DisplayName { get; }
     public EndpointMetadataCollection Metadata { get; }
     public RequestDelegate? RequestDelegate { get; }
     public override string? ToString() => DisplayName ?? base.ToString();
@@ -781,8 +791,8 @@ internal sealed partial class EndpointMiddleware   // this middleware is quite s
 
          Log.ExecutingEndpoint(_logger, endpoint);
 
-         try {
-            var requestTask = endpoint.RequestDelegate(httpContext);     // execute endpoint's delegate
+         try {                      // execute endpoint's delegate        this is when Controller and ActionContext instance is created, and ActionContext is set to be 
+            var requestTask = endpoint.RequestDelegate(httpContext);     // <----------------------------------------------------------- an property of this Controller
             if (!requestTask.IsCompletedSuccessfully) {
                return AwaitRequestTask(endpoint, requestTask, _logger);  // if endpoint found and executed successfully, return immediately, 
                                                                          // therefore short circuit the rest of middlewares
@@ -1459,7 +1469,7 @@ public static class EndpointRouteBuilderExtensions
                                                                                  RouteValueDictionary defaults = null, RouteValueDictionary constraints = null,
                                                                                  RouteValueDictionary dataTokens = null)
    {
-      var endpointDatasource = endpointBuilder.ServiceProvider.GetRequiredService<ControllerActionEndpointDataSource>();
+      var endpointDatasource = endpointBuilder.ServiceProvider.GetRequiredService<ControllerActionEndpointDataSource>();   // <-------------------------------------- 1.
       endpointBuilder.DataSources.Add(endpointDatasource);
       return endpointDatasource.AddRoute(name, pattern, defaults, constraints, dataTokens);
    }
@@ -1467,6 +1477,15 @@ public static class EndpointRouteBuilderExtensions
    // you can see that the purpose of these two extension methods, same as `MapControllers()`, `MapDefaultControllerRoute()` is just to use DI to resolve the 
    // EndpointDataSource (ControllerActionEndpointDataSource) and assocaite it to `IEndpointRouteBuilder`, so when it is passed as an argument to EndpointRoutingMiddleware,
    // it can retireve the EndpointDataSource
+}
+
+
+public class FoobarController : Controller
+{
+    [HttpGet("/{foo}")]
+    public Task FooAsync() => ActionContext.HttpContext.Response.WriteAsync(nameof(FooAsync));
+
+    public Task BarAsync() => ActionContext.HttpContext.Response.WriteAsync(nameof(BarAsync));   // convention routing
 }
 ```
 
@@ -1608,6 +1627,7 @@ public class ControllerActionDescriptorProvider : IActionDescriptorProvider
 
       IRouteTemplateProvider templateProvider = method.GetCustomAttributes().OfType<IRouteTemplateProvider>().FirstOrDefault();
 
+      // attribute routing
       if (templateProvider != null)
       {
          AttributeRouteInfo routeInfo = new AttributeRouteInfo
@@ -1626,8 +1646,8 @@ public class ControllerActionDescriptorProvider : IActionDescriptorProvider
 
       // convention routing
       return new ControllerActionDescriptor  
-      {                                        
-         ControllerType = controllerType,
+      {                                                 // AttributeRouteInfo property is null    
+         ControllerType = controllerType,             
          Method = method,
          RouteValues = new Dictionary<string, string>   // <---------------------
          {
@@ -1660,6 +1680,15 @@ public class DefaultActionDescriptorCollectionProvider : IActionDescriptorCollec
 
 ```C#
 //------------------------------------------------V
+public class Endpoint {  
+    public Endpoint(RequestDelegate? requestDelegate, EndpointMetadataCollection? metadata, string? displayName) {
+       //...
+    }
+    public string DisplayName { get; }
+    public EndpointMetadataCollection Metadata { get; }
+    public RequestDelegate? RequestDelegate { get; }
+}
+
 public interface IEndpointConventionBuilder 
 {  
    void Add(Action<EndpointBuilder> convention);
@@ -1753,7 +1782,7 @@ public class ControllerActionEndpointDataSource : ActionEndpointDataSourceBase  
          var attributeInfo = action.AttributeRouteInfo;
          if (attributeInfo == null)   // convention routing
          {
-            foreach (ConventionalRouteEntry route in _conventionalRoutes)
+            foreach (ConventionalRouteEntry route in _conventionalRoutes)   // multiple "same" (only Order different) Endpoint exists for each route added by AddRoute(),
             {
                RoutePattern pattern = _routePatternTransformer.SubstituteRequiredValues(route.Pattern, action.RouteValues);
                if (pattern != null)

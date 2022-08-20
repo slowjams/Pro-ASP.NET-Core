@@ -223,6 +223,7 @@ public class ModelBindingContext
       ModelMetadata = modelMetadata;
       ValueProvider = valueProvider;
    }
+
    public void Bind(object model)
    {
       Model = model;
@@ -265,6 +266,11 @@ public class ModelBinderFactory : IModelBinderFactory
 ```
 
 ```C#
+public class SimpleTypeModelBinderProvider : IModelBinderProvider
+{
+   public IModelBinder GetBinder(ModelMetadata metadata) => metadata.CanConvertFromString ? new SimpleTypeModelBinder() : null;
+}
+
 public class SimpleTypeModelBinder : IModelBinder
 {
    public Task BindAsync(ModelBindingContext context)
@@ -278,9 +284,31 @@ public class SimpleTypeModelBinder : IModelBinder
    }
 }
 
-public class SimpleTypeModelBinderProvider : IModelBinderProvider
+/*
+public class ComplexTypeModelBinderProvider : IModelBinderProvider {
+   // ...
+   return new ComplexTypeModelBinder()
+}
+
+public class ComplexTypeModelBinder : IModelBinder {}
+*/
+
+public class BodyModelBinderProvider : IModelBinderProvider
 {
-   public IModelBinder GetBinder(ModelMetadata metadata) => metadata.CanConvertFromString ? new SimpleTypeModelBinder() : null;
+   public IModelBinder GetBinder(ModelMetadata metadata)
+   {
+      return metadata.Parameter.GetCustomAttribute<FromBodyAttribute>() == null ? null : new BodyModelBinder();                
+   }
+}
+
+public class BodyModelBinder : IModelBinder
+{
+   public async Task BindAsync(ModelBindingContext context)
+   {
+      var input = context.ActionContext.HttpContext.Request.Body;
+      var result = await JsonSerializer.DeserializeAsync(input, context.ModelMetadata.ModelType);
+      context.Bind(result);
+   }
 }
 ```
 
@@ -309,7 +337,7 @@ public class ControllerActionInvoker : IActionInvoker
          var binder = modelBinderFactory.CreateBinder(metadata);
          await binder.BindAsync(context);
          arguments[index] = context.Model;
-      }
+      } 
       return arguments;
    }
 

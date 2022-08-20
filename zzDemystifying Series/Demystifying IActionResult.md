@@ -582,7 +582,7 @@ public abstract class ActionResult : IActionResult {
 }
 
 public interface IStatusCodeActionResult : IActionResult {
-   int? StatusCode { get; }
+   int StatusCode { get; }
 }
 //---------------------------ɅɅɅ
 
