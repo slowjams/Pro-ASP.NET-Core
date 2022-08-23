@@ -75,7 +75,7 @@ public class Startup
    public void ConfigureServices(IServiceCollection services)
    {
       services.AddDbContext<DataContext>(opts => {
-         opts.UseSqlServer(Configuration["ConnectionStrings:ProductConnection"]);
+         opts.UseSqlServer(Configuration["ConnectionStrings:ProductConnection"]);  // configuration.GetConnectionString("ProductConnection")
          opts.EnableSensitiveDataLogging(true);
       });
 

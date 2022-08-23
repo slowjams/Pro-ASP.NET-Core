@@ -1,4 +1,4 @@
-Chapter 28 Using Model Binding
+Chapter 28- Model Binding and Validation
 =================================
 
 * Form data
@@ -380,6 +380,16 @@ public class BindAttribute : Attribute, IModelNameProvider, IPropertyFilterProvi
    public string[] Include { get; }
    public string Prefix { get; set; }
    public Func<ModelMetadata, bool> PropertyFilter { get; }
+}
+
+//---------------------------------------------------------------------------------------------------------------------------------------------------------
+
+public enum ModelValidationState
+{
+   Unvalidated = 0,
+   Invalid = 1,
+   Valid = 2,
+   Skipped = 3
 }
 ```
 

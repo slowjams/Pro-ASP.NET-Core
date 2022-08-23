@@ -558,6 +558,7 @@ public class ObjectResultExecutor : IActionResultExecutor<ObjectResult>
    // ...
    public virtual Task ExecuteAsync(ActionContext context, ObjectResult result)
    {
+      // context.HttpContext.Response.StatusCode
       // ... serilize result.Value and write it to the output
    }
 }

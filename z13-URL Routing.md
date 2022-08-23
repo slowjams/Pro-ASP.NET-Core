@@ -284,7 +284,7 @@ internal sealed class DfaMatcher : Matcher
       if (candidateCount == 1 && policyCount == 0 && _isDefaultEndpointSelector) {
          // Just strict path matching (no route values)
          if (candidate.Flags == Candidate.CandidateFlags.None) {
-            httpContext.SetEndpoint(candidate.Endpoint);  // <--------------------------- 
+            httpContext.SetEndpoint(candidate.Endpoint);  // <--------------------------------------------------------------------------------- 
             return Task.CompletedTask;
          }
       }
@@ -362,8 +362,8 @@ internal sealed class DefaultEndpointSelector : EndpointSelector {
          case 1: {
             ref var state = ref candidateState[0];
             if (CandidateSet.IsValidCandidate(ref state)) {
-               httpContext.SetEndpoint(state.Endpoint);            // <-------------- associate HttpContext with an endpoint
-               httpContext.Request.RouteValues = state.Values;    // <--------------  setup RouteValues
+               httpContext.SetEndpoint(state.Endpoint);            // <-------------------------------------------- associate HttpContext with an endpoint
+               httpContext.Request.RouteValues = state.Values;    // <--------------------------------------------- setup RouteValues
             }
             break;
          }
