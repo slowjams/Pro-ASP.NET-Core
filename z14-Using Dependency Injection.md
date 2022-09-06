@@ -530,13 +530,30 @@ internal sealed class CallSiteValidator: CallSiteVisitor<CallSiteValidator.CallS
 }
 //-------------------------------------Ʌ
 ```
-```C# ActivatorUtilities
 
-public static class ActivatorUtilities {   // namespace Microsoft.Extensions.DependencyInjection
-   public static ObjectFactory CreateFactory(Type instanceType, Type[] argumentTypes);
+```C#
+// namespace Microsoft.Extensions.DependencyInjection
+public static class ActivatorUtilities  // Activator.CreateInstance + IServiceProvider
+{     
+   // public delegate object ObjectFactory(IServiceProvider serviceProvider, object?[]? arguments);
+   public static ObjectFactory CreateFactory(Type instanceType, Type[] argumentTypes) // create a delegate that instantiate a type with constructor arguments provided directly
+   {
+      FindApplicableConstructor(instanceType, argumentTypes, out ConstructorInfo? constructor, out int[] parameterMap);
+      ParameterExpression provider = Expression.Parameter(typeof(IServiceProvider), "provider");
+      ParameterExpression argumentArray = Expression.Parameter(typeof(object[]), "argumentArray");
+      Expression factoryExpressionBody = BuildFactoryExpression(constructor, parameterMap, provider, argumentArray);
+
+      var factoryLambda = Expression.Lambda<Func<IServiceProvider, object?[]?, object>>(factoryExpressionBody, provider, argumentArray);
+      Func<IServiceProvider, object?[]?, object>? result = factoryLambda.Compile();
+      return result.Invoke;
+   }
+
    public static object CreateInstance(IServiceProvider provider, Type instanceType, params object[] parameters);
+
    public static T CreateInstance<T>(IServiceProvider provider, params object[] parameters);
+
    public static object GetServiceOrCreateInstance(IServiceProvider provider, Type type);
+   
    public static T GetServiceOrCreateInstance<T>(IServiceProvider provider);
 }
 // ActivatorUtilities is smart enough to pick up a suitable constructor, interanlly it uses a complex process to check object[] parameters

@@ -2,12 +2,158 @@ Chapter 30- Filters
 =================================
 
 
+```C#
+public class Startup 
+{
+   // ...
+
+   public void ConfigureServices(IServiceCollection services)
+   {
+      // ...
+      services.AddScoped<FilterXXXAttribute>();
+      services.Configure<MvcOptions>(opts => opts.Filters.Add(new MessageFilterAttribute("This is the globally-scoped filter")));   // default Order is 0
+   }
+}
+
+[MessageFilter("This is the controller-scoped filter", Order = 10)]
+public class HomeController : Controller
+{
+   [MessageFilter("This is the first action-scoped filter", Order = 1)]
+   [MessageFilter("This is the second action-scoped filter", Order = -1)]
+   public IActionResult Index()
+   {
+      return View("Message", $"{DateTime.Now.ToLongTimeString()}: This is the Message Razor Page");
+   }
+}
+/*
+Without Order:
+
+   global-scoped filter -> controller-scoped filter -> first action-scoped filter -> second action-scoped filter
+
+After Order:
+
+   second action-scoped filter -> global-scoped filter ->  first action-scoped filter -> controller-scoped filter
+*/
+
+
+//------------------------------------------------------------------------------------------------------------------------------
+public class SimpleCacheAttribute : Attribute, IResourceFilter
+{
+   private Dictionary<PathString, IActionResult> CachedResponses = new Dictionary<PathString, IActionResult>();
+
+   public void OnResourceExecuting(ResourceExecutingContext context)
+   {
+      PathString path = context.HttpContext.Request.Path;
+      if (CachedResponses.ContainsKey(path))
+      {
+         context.Result = CachedResponses[path];
+         CachedResponses.Remove(path);
+      }
+   }
+
+   public void OnResourceExecuted(ResourceExecutedContext context)
+   {
+      CachedResponses.Add(context.HttpContext.Request.Path, context.Result);
+   }
+}
+
+public class SimpleCacheAsyncAttribute : Attribute, IAsyncResourceFilter
+{
+   private Dictionary<PathString, IActionResult> CachedResponses = new Dictionary<PathString, IActionResult>();
+
+   public async Task OnResourceExecutionAsync(ResourceExecutingContext context, ResourceExecutionDelegate next)
+   {
+      PathString path = context.HttpContext.Request.Path;
+      if (CachedResponses.ContainsKey(path))
+      {
+         context.Result = CachedResponses[path];
+         CachedResponses.Remove(path);
+      }
+      else
+      {
+         ResourceExecutedContext execContext = await next();   // next delegate must point to the action method somehow
+
+         // it is like statements after `await next()` runs after OnResourceExecuted
+         CachedResponses.Add(context.HttpContext.Request.Path, execContext.Result);
+      }
+   }
+}
+
+public class ChangeArgAdvanceAttribute : ActionFilterAttribute
+{
+   
+   /*  even thought you uncommented them, they still won't run, those two will only run if you didn't override OnActionExecutionAsync
+   public override void OnActionExecuting(ActionExecutingContext context) { }
+
+   public override void OnActionExecuted(ActionExecutedContext context) { }
+   */
+
+   public override async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
+   {
+      if (context.ActionArguments.ContainsKey("message1"))
+      {
+         context.ActionArguments["message1"] = "New message";
+      }
+
+      await next();   
+   }
+}
+
+[AttributeUsage(AttributeTargets.Method | AttributeTargets.Class, AllowMultiple = true)]
+public class GuidResponseAttribute : Attribute, IAsyncAlwaysRunResultFilter, IFilterFactory
+{
+   private int counter = 0;
+   private string guid = Guid.NewGuid().ToString();
+
+   public bool IsReusable => false;
+
+   public IFilterMetadata CreateInstance(IServiceProvider serviceProvider)
+   {
+      return ActivatorUtilities.GetServiceOrCreateInstance<GuidResponseAttribute>(serviceProvider);
+   }
+
+   public async Task OnResultExecutionAsync(ResultExecutingContext context, ResultExecutionDelegate next)
+   {
+      Dictionary<string, string> resultData;
+
+      if (context.Result is ViewResult vr && vr.ViewData.Model is Dictionary<string, string> data)
+      {
+         resultData = data;
+      }
+      else
+      {
+         resultData = new Dictionary<string, string>();
+         context.Result = new ViewResult()
+         {
+            ViewName = "/Views/Shared/Message.cshtml",
+            ViewData = new ViewDataDictionary(new EmptyModelMetadataProvider(), new ModelStateDictionary())
+            {
+               Model = resultData
+            }
+         };
+      }
+
+      while (resultData.ContainsKey($"Counter_{counter}"))
+      {
+         counter++;
+      }
+
+      resultData[$"Counter_{counter}"] = guid;
+      await next();
+   }
+}
+```
+
+
+
 ## Source Code
 
 ```C#
-public interface IFilterMetadata  // marker interface for filters handled in the MVC request pipeline
-{
+public interface IFilterMetadata { } // marker interface for filters handled in the MVC request pipeline
 
+public interface IOrderedFilter : IFilterMetadata 
+{
+   int Order { get; }
 }
 
 public abstract class FilterContext : ActionContext
@@ -65,8 +211,9 @@ public class AuthorizationFilterContext : FilterContext
 //----------------------------------------V
 public interface IResourceFilter : IFilterMetadata
 {
-   void OnResourceExecuting(ResourceExecutingContext context);
-   void OnResourceExecuted(ResourceExecutedContext context);
+   void OnResourceExecuting(ResourceExecutingContext context);   // if you set context.Result = newIActionResultInstance
+
+   void OnResourceExecuted(ResourceExecutedContext context);     // OnResourceExecuted won't execute, and other filters like Result Filters won't run neither
 }
 
 public interface IAsyncResourceFilter : IFilterMetadata
@@ -97,7 +244,7 @@ public class ResourceExecutedContext : FilterContext
 
    public virtual bool ExceptionHandled { get; set; }
 
-   public virtual IActionResult? Result { get; set; }
+   public virtual IActionResult Result { get; set; }
 
    public virtual Exception Exception { get; set; }
 
@@ -105,6 +252,302 @@ public class ResourceExecutedContext : FilterContext
 
 }
 //----------------------------------------Ʌ
+
+// ActionFilter
+//----------------------------------------V
+public interface IActionFilter : IFilterMetadata 
+{
+   void OnActionExecuting(ActionExecutingContext context);   // if you set context.Result = newIActionResultInstance
+
+   void OnActionExecuted(ActionExecutedContext context);     // OnActionExecuted won't execute, but other filters like ResultFilters still run
+}                                                            
+
+public interface IAsyncActionFilter : IFilterMetadata
+{
+   Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next);
+}
+
+//-----------------------------------------VV
+public abstract class ActionFilterAttribute :Attribute, IActionFilter, IAsyncActionFilter, IResultFilter, IAsyncResultFilter, IOrderedFilter
+{
+   public int Order { get; set; }
+
+   public virtual void OnActionExecuting(ActionExecutingContext context) { }
+
+   public virtual void OnActionExecuted(ActionExecutedContext context) { }
+
+   public virtual async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
+   {   
+      OnActionExecuting(context);
+      if (context.Result == null)
+      {
+         OnActionExecuted(await next());
+      }
+   }
+
+   public virtual void OnResultExecuting(ResultExecutingContext context) { }
+ 
+   public virtual void OnResultExecuted(ResultExecutedContext context) { }
+
+   public virtual async Task OnResultExecutionAsync(ResultExecutingContext context, ResultExecutionDelegate next)
+   {    
+      OnResultExecuting(context);
+      if (!context.Cancel)
+      {
+         OnResultExecuted(await next());
+      }
+   }
+}
+//-----------------------------------------ɅɅ
+
+public class ActionExecutingContext : FilterContext
+{
+   public ActionExecutingContext(ActionContext actionContext, IList<IFilterMetadata> filters, IDictionary<string, object?> actionArguments, object controller) : base(actionContext, filters)
+   {
+      ActionArguments = actionArguments;
+      Controller = controller;
+   }
+
+   public virtual IActionResult Result { get; set; }
+   public virtual IDictionary<string, object> ActionArguments { get; }
+   public virtual object Controller { get; }
+}
+
+public class ActionExecutedContext : FilterContext
+{
+    private Exception _exception;
+    private ExceptionDispatchInfo? _exceptionDispatchInfo;
+ 
+    public ActionExecutedContext(ActionContext actionContext, IList<IFilterMetadata> filters, object controller) : base(actionContext, filters)
+    {
+        Controller = controller;
+    }
+
+    public virtual bool Canceled { get; set; }
+    public virtual object Controller { get;  }
+    public virtual Exception Exception { get; set; }  
+    public virtual ExceptionDispatchInfo ExceptionDispatchInfo { get; set; }   
+    public virtual bool ExceptionHandled { get; set; }
+    public virtual IActionResult Result { get; set; }
+}
+//----------------------------------------Ʌ
+
+
+// ResultFilter, executed when the action method/ction filters complete successfully.
+//               not executed when: * authorization filter or resource filter short-circuits the request (because it prevents execution of the action)
+//                                  * an exception filter handles an exception by producing an action result
+//----------------------------V
+public interface IResultFilter : IFilterMetadata
+{
+   void OnResultExecuting(ResultExecutingContext context);  // if you set context.Result = newIActionResultInstance
+
+   void OnResultExecuted(ResultExecutedContext context);    // OnResultExecuted still execute, which make senses because Result Execution still needs to be run
+}
+
+public interface IAsyncResultFilter : IFilterMetadata
+{
+   Task OnResultExecutionAsync(ResultExecutingContext context, ResultExecutionDelegate next);
+}
+
+public class ResultExecutingContext : FilterContext
+{
+   public ResultExecutingContext(ActionContext actionContext, IList<IFilterMetadata> filters, IActionResult result, object controller) : base(actionContext, filters)
+   {
+      Result = result;
+      Controller = controller;
+   }
+
+   public virtual object Controller { get; }
+   public virtual IActionResult Result { get; set; }
+   public virtual bool Cancel { get; set; }
+}
+
+public class ResultExecutedContext : FilterContext
+{
+   private Exception _exception;
+   private ExceptionDispatchInfo _exceptionDispatchInfo;
+
+   public ResultExecutedContext(ActionContext actionContext, IList<IFilterMetadata> filters, IActionResult result, object controller) : base(actionContext, filters) 
+   {
+      Result = result;
+      Controller = controller;
+   }
+
+   public virtual object Controller { get; }
+
+   public virtual bool Canceled { get; set; }
+
+   public virtual bool ExceptionHandled { get; set; }
+
+   public virtual IActionResult Result { get; set; }
+
+   public virtual Exception Exception { get; set; }
+
+   public virtual ExceptionDispatchInfo ExceptionDispatchInfo { get; set; }
+
+}
+
+// always runs regardless of the situation mentioned above
+public interface IAsyncAlwaysRunResultFilter : IAsyncResultFilter { }
+
+public interface IAlwaysRunResultFilter : IResultFilter { }
+//----------------------------Ʌ
+
+
+// ExceptionFilter
+//----------------------------V
+public interface IExceptionFilter : IFilterMetadata
+{
+    void OnException(ExceptionContext context);
+}
+
+public interface IAsyncExceptionFilter : IFilterMetadata
+{
+   Task OnExceptionAsync(ExceptionContext context);
+}
+
+public abstract class ExceptionFilterAttribute : Attribute, IAsyncExceptionFilter, IExceptionFilter, IOrderedFilter
+{
+   public int Order { get; set; }
+
+   public virtual Task OnExceptionAsync(ExceptionContext context)
+   {
+      OnException(context);
+      return Task.CompletedTask;
+   }
+
+   public virtual void OnException(ExceptionContext context)
+   {
+
+   }
+}
+
+public class ExceptionContext : FilterContext
+{
+    private Exception _exception;
+    private ExceptionDispatchInfo? _exceptionDispatchInfo;
+ 
+    public ActionExecutedContext(ActionContext actionContext, IList<IFilterMetadata> filters, object controller) : base(actionContext, filters)
+    {  
+    }
+
+    public virtual Exception Exception { get; set; }  
+    public virtual ExceptionDispatchInfo ExceptionDispatchInfo { get; set; }   
+    public virtual bool ExceptionHandled { get; set; }
+    public virtual IActionResult Result { get; set; }
+}
+//----------------------------Ʌ
+```
+
+```C#
+public interface IFilterFactory : IFilterMetadata
+{
+   
+   bool IsReusable { get; }   // indicates if the result of CreateInstance(System.IServiceProvider) can be reused across requests
+                              // note that this has nothing to do with DI, it means if the filter instance can be reused in the next http request
+                              
+   IFilterMetadata CreateInstance(IServiceProvider serviceProvider);  // always executes when IsReusable set to false, won't execute for next request when IsReusable set to true
+}
+
+
+//A filter that creates another filter of ImplementationType, retrieving missing constructor arguments from dependency injection
+public class TypeFilterAttribute : Attribute, IFilterFactory, IOrderedFilter
+{
+   private ObjectFactory _factory;
+
+   public TypeFilterAttribute(Type type)
+   {
+      ImplementationType = type;
+   }
+
+   public object[] Arguments { get; set; }
+
+   public Type ImplementationType { get; }
+
+   public int Order { get; set; }
+
+   public bool IsReusable { get; set; }
+
+   public IFilterMetadata CreateInstance(IServiceProvider serviceProvider)
+   {
+      var argumentTypes = Arguments.Select(a => a.GetType()).ToArray();
+
+      _factory = ActivatorUtilities.CreateFactory(ImplementationType, argumentTypes ?? Type.EmptyTypes);
+
+      var filter = (IFilterMetadata)_factory(serviceProvider, Arguments);
+
+      if (filter is IFilterFactory filterFactory)
+      {
+         filter = filterFactory.CreateInstance(serviceProvider);
+      }
+ 
+      return filter;
+   }
+}
+
+public class ServiceFilterAttribute : Attribute, IFilterFactory, IOrderedFilter
+{
+   public ServiceFilterAttribute(Type type)
+   {
+      ServiceType = type ?? throw new ArgumentNullException(nameof(type));
+   }
+
+   public int Order { get; set; }
+
+   public Type ServiceType { get; }
+
+   public bool IsReusable { get; set; }
+
+   public IFilterMetadata CreateInstance(IServiceProvider serviceProvider)
+   {
+      var filter = (IFilterMetadata)serviceProvider.GetRequiredService(ServiceType);
+      
+      if (filter is IFilterFactory filterFactory)
+      {
+         // unwrap filter factories
+         filter = filterFactory.CreateInstance(serviceProvider);
+      }
+
+      return filter;
+   }
+}
+```
+
+
+```C#
+// example
+public class Startup 
+{
+   // ...
+   public void ConfigureServices(IServiceCollection services)
+   {
+      services.AddScoped<GuidResponseAttribute>();  // GuidResponse's IsReusable set to false
+   }
+}
+/
+
+[GuidResponse]
+[GuidResponse]
+public class HomeController : Controller
+{
+   public IActionResult Index() 
+   { 
+      // ... 
+   };
+   // ...
+}
+
+/*
+(first request)
+Name	      Value
+Counter_0	fb308aa8-449b-4775-a0d5-53b33d35dbd4   
+Counter_1	fb308aa8-449b-4775-a0d5-53b33d35dbd4
+
+(second request)
+Name	Value
+Counter_0	937757b6-0829-42d3-8f8e-9367dcb588bf
+Counter_1	937757b6-0829-42d3-8f8e-9367dcb588bf
+*/
 ```
 
 <style type="text/css">
