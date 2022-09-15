@@ -173,7 +173,7 @@ internal sealed partial class GenericWebHostService : IHostedService
       var builder = ApplicationBuilderFactory.CreateBuilder(Server.Features);
 
       // build the request pipeline
-      application = builder.Build();  
+      application = builder.Build();   // <--------------------------------------------- that's when all Middleware instances are created
 
       var httpApplication = new HostingApplication(application, Logger, DiagnosticListener, ActivitySource, Propagator, HttpContextFactory);
  
