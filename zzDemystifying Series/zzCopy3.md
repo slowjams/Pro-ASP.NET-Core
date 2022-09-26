@@ -1400,133 +1400,6 @@ internal sealed class ActionInvokerFactory : IActionInvokerFactory      // <----
 //----------------------------------------------------------------Ʌ
 ```
 
-
-```C#
-//----------------------------------------------------------------------------------------V
-internal interface ITypeActivatorCache
-{
-   TInstance CreateInstance<TInstance>(IServiceProvider serviceProvider, Type optionType);
-}
-
-internal sealed class TypeActivatorCache : ITypeActivatorCache
-{
-   private readonly Func<Type, ObjectFactory> _createFactory = (type) => ActivatorUtilities.CreateFactory(type, Type.EmptyTypes);
-
-   private readonly ConcurrentDictionary<Type, ObjectFactory> _typeActivatorCache = new ConcurrentDictionary<Type, ObjectFactory>();
-
-   public TInstance CreateInstance<TInstance>(IServiceProvider serviceProvider, Type implementationType)
-   {
-      var createFactory = _typeActivatorCache.GetOrAdd(implementationType, _createFactory);
-      return (TInstance)createFactory(serviceProvider, arguments: null);
-   }
-}
-//----------------------------------------------------------------------------------------Ʌ
-
-//-----------------------------------------------------------------------------------------------------------------V
-public interface IControllerActivator
-{
-   object Create(ControllerContext context);  // creates a controller
-   
-   void Release(ControllerContext context, object controller);
-
-   ValueTask ReleaseAsync(ControllerContext context, object controller)
-   {
-      Release(context, controller);
-      return default;
-   }
-
-}
-
-//----------------------------------------------VV
-internal sealed class DefaultControllerActivator : IControllerActivator
-{
-   private readonly ITypeActivatorCache _typeActivatorCache;
-
-   public DefaultControllerActivator(ITypeActivatorCache typeActivatorCache)
-   {
-      _typeActivatorCache = typeActivatorCache;
-   }
-
-   public object Create(ControllerContext controllerContext)
-   {
-      var controllerTypeInfo = controllerContext.ActionDescriptor.ControllerTypeInfo;
-
-      var serviceProvider = controllerContext.HttpContext.RequestServices;
-
-      return _typeActivatorCache.CreateInstance<object>(serviceProvider, controllerTypeInfo.AsType());
-   }
-
-   public void Release(ControllerContext context, object controller)
-   {
-      if (controller is IDisposable disposable)
-      {
-         disposable.Dispose();
-      }
-   }
-
-   public ValueTask ReleaseAsync(ControllerContext context, object controller)
-   {
-      if (controller is IAsyncDisposable asyncDisposable)
-      {
-         return asyncDisposable.DisposeAsync();
-      }
- 
-      Release(context, controller);
-      return default;
-   }
-//----------------------------------------------ɅɅ
-
-//----------------------------------------------VV
-public interface IControllerFactory
-{
-   object CreateController(ControllerContext context);
-
-   void ReleaseController(ControllerContext context, object controller);
-
-   ValueTask ReleaseControllerAsync(ControllerContext context, object controller)
-   {
-      ReleaseController(context, controller);
-      return default;
-   }
-}
-
-internal sealed class DefaultControllerFactory : IControllerFactory
-{
-   private readonly IControllerActivator _controllerActivator;
-   private readonly IControllerPropertyActivator[] _propertyActivators;
-
-   public DefaultControllerFactory(IControllerActivator controllerActivator, IEnumerable<IControllerPropertyActivator> propertyActivators)
-   {
-      _controllerActivator = controllerActivator;
-      _propertyActivators = propertyActivators.ToArray();
-   }
-
-   public object CreateController(ControllerContext context)
-   {
-      var controller = _controllerActivator.Create(context);
-      foreach (var propertyActivator in _propertyActivators)
-      {
-         propertyActivator.Activate(context, controller);
-      }
-
-      return controller;
-   }
-
-   public void ReleaseController(ControllerContext context, object controller)
-   {
-      _controllerActivator.Release(context, controller);
-   }
-
-   public ValueTask ReleaseControllerAsync(ControllerContext context, object controller)
-   {
-      return _controllerActivator.ReleaseAsync(context, controller);
-   }
-}
-//----------------------------------------------ɅɅ
-//-----------------------------------------------------------------------------------------------------------------Ʌ
-```
-
-
 ```C#
 //------------------------------------------------V
 internal sealed class ControllerActionInvokerCache                // <---------------------------------f3
@@ -1593,7 +1466,7 @@ internal sealed class ControllerActionInvokerCache                // <----------
             filterExecutor ?? actionMethodExecutor,
             actionMethodExecutor);
 
-         actionDescriptor.CacheEntry = cacheEntry;   // <----------
+         actionDescriptor.CacheEntry = cacheEntry;
       }
       else 
       {
@@ -2099,17 +1972,18 @@ internal abstract partial class ResourceInvoker                    // <---------
             var authorizationContext = _authorizationContext;
 
             filter.OnAuthorization(authorizationContext);
-            if (authorizationContext.Result != null)   // that's how you short-circuit by setting Result to IActionResult
+            if (authorizationContext.Result != null)
             {
                goto case State.AuthorizationShortCircuit;
             }
 
-            goto case State.AuthorizationNext;    // go up again, look like _index from FilterCursor persists, so it doesn't call sth like InvokeNextXXXilter like others
+            goto case State.AuthorizationNext;
          
          case State.AuthorizationShortCircuit:
+            // this is a short-circuit - execute relevant result filters + result and complete this invocation.
             isCompleted = true;
             _result = _authorizationContext.Result;
-            return InvokeAlwaysRunResultFilters();   // invoke IAlwaysRunResultFilter
+            return InvokeAlwaysRunResultFilters();
          
          case State.AuthorizationEnd:
             goto case State.ResourceBegin;
@@ -2288,7 +2162,7 @@ internal abstract partial class ResourceInvoker                    // <---------
             goto case State.ExceptionEnd;
 
          case State.ExceptionSyncBegin:
-            var task = InvokeNextExceptionFilterAsync();  // InvokeNextExceptionFilterAsync method has a try catch block to catch Exception and assign it to _exceptionContext
+            var task = InvokeNextExceptionFilterAsync();
             if (!task.IsCompletedSuccessfully)
             {
                next = State.ExceptionSyncEnd;
@@ -2339,7 +2213,7 @@ internal abstract partial class ResourceInvoker                    // <---------
          case State.ExceptionEnd:
             var exceptionContext = _exceptionContext;
 
-            if (scope == Scope.Exception)   // emmm, must be for InvokeNextExceptionFilterAsync
+            if (scope == Scope.Exception)
             {
                isCompleted = true;
                return Task.CompletedTask;
@@ -2420,52 +2294,6 @@ internal abstract partial class ResourceInvoker                    // <---------
 
          default:
             throw new InvalidOperationException();
-      }
-   }
-
-   private Task InvokeNextExceptionFilterAsync()
-   {
-      try
-      {
-         var next = State.ExceptionNext;
-         var state = (object?)null;
-         var scope = Scope.Exception;
-         var isCompleted = false;
-
-         while (!isCompleted)
-         {
-            var lastTask = Next(ref next, ref scope, ref state, ref isCompleted);
-            if (!lastTask.IsCompletedSuccessfully)
-            {
-               return Awaited(this, lastTask, next, scope, state, isCompleted);
-            }
-         }
-
-         return Task.CompletedTask;
-      }
-      catch (Exception ex)
-      {
-         return Task.FromException(ex);
-      }
-
-      static async Task Awaited(ResourceInvoker invoker, Task lastTask, State next, Scope scope, object? state, bool isCompleted)
-      {
-         try
-         {
-            await lastTask;
-
-            while (!isCompleted)
-            {
-               await invoker.Next(ref next, ref scope, ref state, ref isCompleted);
-            }
-         }
-         catch (Exception exception)
-         {
-            invoker._exceptionContext = new ExceptionContextSealed(invoker._actionContext, invoker._filters)
-            {
-               ExceptionDispatchInfo = ExceptionDispatchInfo.Capture(exception),
-            };
-         }
       }
    }
 

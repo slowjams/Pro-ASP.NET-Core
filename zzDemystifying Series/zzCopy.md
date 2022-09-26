@@ -137,7 +137,11 @@ public static class MvcServiceCollectionExtensions
 }
 ```
 
-Everything sits inside `MapControllers`
+Part A - (denoted as `a`) Overall
+
+Part B - (denoted as `d`) How Filters information discovered
+
+Part C - (denoted as `f`) How Filters get executed in pipeline
 
 ```C#
 public static class ControllerEndpointRouteBuilderExtensions 
@@ -180,8 +184,8 @@ internal sealed class ControllerActionEndpointDataSourceFactory   // <----------
  
    public ControllerActionEndpointDataSourceFactory(
       ControllerActionEndpointDataSourceIdProvider dataSourceIdProvider,
-      IActionDescriptorCollectionProvider actions,     // <--------------------------- a1.1
-      ActionEndpointFactory factory)                   // <--------------------------- a1.2
+      IActionDescriptorCollectionProvider actions,     // <--------------------------- b1
+      ActionEndpointFactory factory)                   // <--------------------------- c1
    {
       _dataSourceIdProvider = dataSourceIdProvider;
       _actions = actions;
@@ -190,7 +194,7 @@ internal sealed class ControllerActionEndpointDataSourceFactory   // <----------
  
    public ControllerActionEndpointDataSource Create(OrderedEndpointsSequenceProvider orderProvider)
    {
-       return new ControllerActionEndpointDataSource(_dataSourceIdProvider, _actions, _factory, orderProvider);   // <--------------------------- a1.3.
+       return new ControllerActionEndpointDataSource(_dataSourceIdProvider, _actions, _factory, orderProvider);   // <--------------------------- a2
    }
 }
 //-------------------------------------------------------------Ʌ
@@ -219,13 +223,13 @@ public class ActionDescriptor
 
    public IList<ParameterDescriptor> BoundProperties { get; set; } = Array.Empty<ParameterDescriptor>();
 
-   public IList<FilterDescriptor> FilterDescriptors { get; set; } = Array.Empty<FilterDescriptor>();
+   public IList<FilterDescriptor> FilterDescriptors { get; set; } = Array.Empty<FilterDescriptor>();   // <-----------------------------f4.2
 
    public virtual string? DisplayName { get; set; }
 
    public IDictionary<object, object?> Properties { get; set; } = default!;
 
-   internal IFilterMetadata[]? CachedReusableFilters { get; set; }   // <-----------------------------
+   internal IFilterMetadata[]? CachedReusableFilters { get; set; }   
 }
 //---------------------------Ʌ
 
@@ -234,7 +238,7 @@ public interface IActionDescriptorCollectionProvider
    ActionDescriptorCollection ActionDescriptors { get; }
 }
 
-public abstract class ActionDescriptorCollectionProvider : IActionDescriptorCollectionProvider
+public abstract class ActionDescriptorCollectionProvider : IActionDescriptorCollectionProvider   // <--------------------------------------d2.1
 {
    public abstract ActionDescriptorCollection ActionDescriptors { get; }
    public abstract IChangeToken GetChangeToken();
@@ -247,68 +251,8 @@ public interface IActionDescriptorProvider
    void OnProvidersExecuted(ActionDescriptorProviderContext context);
 }
 
-//------------------------------------------------------V
-internal sealed class ControllerActionDescriptorProvider : IActionDescriptorProvider
-{
-   private readonly ApplicationPartManager _partManager;
-   private readonly ApplicationModelFactory _applicationModelFactory;
-
-   public ControllerActionDescriptorProvider(ApplicationPartManager partManager, ApplicationModelFactory applicationModelFactory) { ... }
-
-   public int Order => -1000;
-
-   public void OnProvidersExecuting(ActionDescriptorProviderContext context)
-   {
-      foreach (var descriptor in GetDescriptors())
-      {
-         context.Results.Add(descriptor);
-      }
-   }
-
-   public void OnProvidersExecuted(ActionDescriptorProviderContext context)
-   {
-      var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-      for (var i = 0; i < context.Results.Count; i++)
-      {
-         var action = context.Results[i];
-         foreach (var key in action.RouteValues.Keys)
-         {
-            keys.Add(key);
-         }
-      }
-
-      for (var i = 0; i < context.Results.Count; i++)
-      {
-         var action = context.Results[i];
-         foreach (var key in keys)
-         {
-            if (!action.RouteValues.ContainsKey(key))
-            {
-               action.RouteValues.Add(key, null);
-            }
-         }
-      }
-   }
-
-   internal IEnumerable<ControllerActionDescriptor> GetDescriptors()
-   {
-      var controllerTypes = GetControllerTypes();
-      var application = _applicationModelFactory.CreateApplicationModel(controllerTypes);
-      return ControllerActionDescriptorBuilder.Build(application);
-   }
- 
-   private IEnumerable<TypeInfo> GetControllerTypes()
-   {
-      var feature = new ControllerFeature();
-      _partManager.PopulateFeature(feature);
- 
-      return feature.Controllers;
-   }
-}
-//------------------------------------------------------Ʌ
-
 //---------------------------------------------------------------------V
-internal sealed partial class DefaultActionDescriptorCollectionProvider : ActionDescriptorCollectionProvider
+internal sealed partial class DefaultActionDescriptorCollectionProvider : ActionDescriptorCollectionProvider   // <---------------------------- b2
 {
    private readonly IActionDescriptorProvider[] _actionDescriptorProviders;
    private readonly IActionDescriptorChangeProvider[] _actionDescriptorChangeProviders;
@@ -364,6 +308,597 @@ internal sealed partial class DefaultActionDescriptorCollectionProvider : Action
 }
 //---------------------------------------------------------------------Ʌ
 
+public interface IActionDescriptorProvider
+{
+   int Order { get; }
+   void OnProvidersExecuting(ActionDescriptorProviderContext context);
+   void OnProvidersExecuted(ActionDescriptorProviderContext context);
+}
+
+//------------------------------------------------------V
+internal sealed class ControllerActionDescriptorProvider : IActionDescriptorProvider   // <---------------------------------d3.1
+{
+   private readonly ApplicationPartManager _partManager;
+   private readonly ApplicationModelFactory _applicationModelFactory;    // <------------------------------d3.3+
+
+   public ControllerActionDescriptorProvider(ApplicationPartManager partManager, ApplicationModelFactory applicationModelFactory) { ... }
+
+   public int Order => -1000;
+
+   public void OnProvidersExecuting(ActionDescriptorProviderContext context)
+   {
+      foreach (var descriptor in GetDescriptors())
+      {
+         context.Results.Add(descriptor);
+      }
+   }
+
+   public void OnProvidersExecuted(ActionDescriptorProviderContext context)
+   {
+      var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+      for (var i = 0; i < context.Results.Count; i++)
+      {
+         var action = context.Results[i];
+         foreach (var key in action.RouteValues.Keys)
+         {
+            keys.Add(key);
+         }
+      }
+
+      for (var i = 0; i < context.Results.Count; i++)
+      {
+         var action = context.Results[i];
+         foreach (var key in keys)
+         {
+            if (!action.RouteValues.ContainsKey(key))
+            {
+               action.RouteValues.Add(key, null);
+            }
+         }
+      }
+   }
+
+   internal IEnumerable<ControllerActionDescriptor> GetDescriptors()  // <---------------d3.2, use IApplicationModelProvider(DefaultApplicationModelProvider) to create filter
+   {
+      var controllerTypes = GetControllerTypes();
+      var application = _applicationModelFactory.CreateApplicationModel(controllerTypes);   // <------------------------------d3.3+, d5.5
+      return ControllerActionDescriptorBuilder.Build(application);    // <---------------------------d5.6+
+   }
+ 
+   private IEnumerable<TypeInfo> GetControllerTypes()
+   {
+      var feature = new ControllerFeature();
+      _partManager.PopulateFeature(feature);
+ 
+      return feature.Controllers;
+   }
+}
+//------------------------------------------------------Ʌ
+
+//---------------------------V
+public class FilterDescriptor
+{
+   public FilterDescriptor(IFilterMetadata filter, int filterScope)
+   {
+      Filter = filter;
+      Scope = filterScope;
+
+      if (Filter is IOrderedFilter orderedFilter)
+      {
+         Order = orderedFilter.Order;   // <----------------------assign value to Order property
+      }
+   }
+
+   public IFilterMetadata Filter { get; }
+
+   public int Order { get; set; }
+
+   public int Scope { get; }
+}
+//---------------------------Ʌ
+
+//---------------------V
+public class FilterItem   // associate executable filters with IFilterMetadata instances
+{
+   public FilterItem(FilterDescriptor descriptor)
+   {
+      Descriptor = descriptor;
+   }
+
+   public FilterItem(FilterDescriptor descriptor, IFilterMetadata filter) : this(descriptor)
+   {
+      Filter = filter;
+   }
+
+   public FilterDescriptor Descriptor { get; } = default!;
+
+   public IFilterMetadata? Filter { get; set; }
+
+   public bool IsReusable { get; set; }
+}
+//---------------------Ʌ
+
+//-----------------------------------------------------V
+internal static class ControllerActionDescriptorBuilder      // <---------------------------------d6
+{
+   public static IList<ControllerActionDescriptor> Build(ApplicationModel application)  // ApplicationModel contains IList<ControllerModel>, which is like call 
+   {                                                                                    // CreateActionDescriptor for each ControllerModel
+      return ApplicationModelFactory.Flatten(application, CreateActionDescriptor);
+   }
+
+   private static ControllerActionDescriptor CreateActionDescriptor(ApplicationModel application, ControllerModel controller, ActionModel action, SelectorModel selector)
+   {
+      var actionDescriptor = new ControllerActionDescriptor
+      {
+         ActionName = action.ActionName,
+         MethodInfo = action.ActionMethod,
+      };
+
+      actionDescriptor.ControllerName = controller.ControllerName;
+      actionDescriptor.ControllerTypeInfo = controller.ControllerType;
+      AddControllerPropertyDescriptors(actionDescriptor, controller);
+ 
+      AddActionConstraints(actionDescriptor, selector);
+      AddEndpointMetadata(actionDescriptor, selector);
+      AddAttributeRoute(actionDescriptor, selector);
+      AddParameterDescriptors(actionDescriptor, action);
+      AddActionFilters(actionDescriptor, action.Filters, controller.Filters, application.Filters);    // <---------------------------------d6.1
+      AddApiExplorerInfo(actionDescriptor, application, controller, action);
+      AddRouteValues(actionDescriptor, controller, action);
+      AddProperties(actionDescriptor, action, controller, application);
+ 
+      return actionDescriptor;
+   }
+
+   private static void AddActionFilters(ControllerActionDescriptor actionDescriptor,                  
+      IEnumerable<IFilterMetadata> actionFilters,
+      IEnumerable<IFilterMetadata> controllerFilters,
+      IEnumerable<IFilterMetadata> globalFilters)
+   {
+      actionDescriptor.FilterDescriptors =                                                            // <---------------------------------d6.2
+         actionFilters.Select(f => new FilterDescriptor(f, FilterScope.Action))   // f is IFilterMetadata, note that those Filters instances are created by the compiler
+         .Concat(controllerFilters.Select(f => new FilterDescriptor(f, FilterScope.Controller)))
+         .Concat(globalFilters.Select(f => new FilterDescriptor(f, FilterScope.Global)))
+         .OrderBy(d => d, FilterDescriptorOrderComparer.Comparer)
+         .ToList();
+   }
+
+   public static void AddRouteValues(ControllerActionDescriptor actionDescriptor, ControllerModel controller, ActionModel action)
+   {
+      foreach (var kvp in action.RouteValues)
+      {
+         if (!actionDescriptor.RouteValues.ContainsKey(kvp.Key))
+         {
+            actionDescriptor.RouteValues.Add(kvp.Key, kvp.Value);
+         }
+      }
+ 
+      foreach (var kvp in controller.RouteValues)
+      {
+         if (!actionDescriptor.RouteValues.ContainsKey(kvp.Key))
+         {
+            actionDescriptor.RouteValues.Add(kvp.Key, kvp.Value);
+         }
+      }
+
+      // ...
+   }
+
+   // ...
+}
+//-----------------------------------------------------Ʌ
+/*
+public static class FilterScope
+{
+   public static readonly int First;
+   public static readonly int Global = 10;
+   public static readonly int Controller = 20;
+   public static readonly int Action = 30;
+   public static readonly int Last = 100;
+}
+*/
+//-----------------------------------------------------Ʌ
+
+//-------------------------------------------V
+internal sealed class ApplicationModelFactory      // <-------------------------------d4
+{
+   private readonly IApplicationModelProvider[] _applicationModelProviders;  // // <-------------------------------d4.1+, contain DefaultApplicationModelProvider
+   private readonly IList<IApplicationModelConvention> _conventions;
+
+   public ApplicationModelFactory(IEnumerable<IApplicationModelProvider> applicationModelProviders, IOptions<MvcOptions> options)
+   {
+      _applicationModelProviders = applicationModelProviders.OrderBy(p => p.Order).ToArray();
+      _conventions = options.Value.Conventions;
+   }
+
+   public ApplicationModel CreateApplicationModel(IEnumerable<TypeInfo> controllerTypes)
+   {
+      var context = new ApplicationModelProviderContext(controllerTypes);
+
+      for (var i = 0; i < _applicationModelProviders.Length; i++)
+      {
+         _applicationModelProviders[i].OnProvidersExecuting(context);   // <-------------------------------d4.1+
+      }
+
+      for (var i = _applicationModelProviders.Length - 1; i >= 0; i--)
+      {
+         _applicationModelProviders[i].OnProvidersExecuted(context);
+      }
+
+      ApplicationModelConventions.ApplyConventions(context.Result, _conventions);
+
+      return context.Result;
+   }
+
+   // ...
+}
+//-------------------------------------------Ʌ
+
+//---------------------------V
+public class ApplicationModel : IPropertyModel, IFilterModel, IApiExplorerModel   // a model for configuring controllers in an MVC application
+{
+   public ApplicationModel()
+   {
+      ApiExplorer = new ApiExplorerModel();
+      Controllers = new List<ControllerModel>();
+      Filters = new List<IFilterMetadata>();
+      Properties = new Dictionary<object, object?>();
+   }
+
+   public ApiExplorerModel ApiExplorer { get; set; }
+   public IList<ControllerModel> Controllers { get; }      // <--------------------------------------------d5.4*, contains all Controllers' info
+   public IList<IFilterMetadata> Filters { get; }
+   public IDictionary<object, object?> Properties { get; }
+}
+//---------------------------Ʌ
+
+//------------------------------------------V
+public class ApplicationModelProviderContext
+{
+   public ApplicationModelProviderContext(IEnumerable<TypeInfo> controllerTypes)
+   {
+      ControllerTypes = controllerTypes;
+   }
+
+   public IEnumerable<TypeInfo> ControllerTypes { get; }
+
+   public ApplicationModel Result { get; } = new ApplicationModel();   // <--------------------------------------------d5.4*
+}
+//------------------------------------------Ʌ
+
+
+//----------------------------------------------------------------------V
+public class ActionModel : ICommonModel, IFilterModel, IApiExplorerModel
+{
+   public ActionModel(MethodInfo actionMethod, IReadOnlyList<object> attributes)
+   {
+       ActionMethod = actionMethod;
+ 
+       ApiExplorer = new ApiExplorerModel();
+       Attributes = new List<object>(attributes);
+       Filters = new List<IFilterMetadata>();
+       Parameters = new List<ParameterModel>();
+       RouteValues = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+       Properties = new Dictionary<object, object?>();
+       Selectors = new List<SelectorModel>();
+   }
+
+   public ActionModel(ActionModel other) { ... }
+
+   public MethodInfo ActionMethod { get; }
+
+   public string ActionName { get; set; } = default!;
+
+   public IReadOnlyList<object> Attributes { get; }
+
+   public ControllerModel Controller { get; set; };
+
+   public IList<IFilterMetadata> Filters { get; }   // <--------------------contains Filters of current Action
+
+   public IList<ParameterModel> Parameters { get; }
+
+   public IDictionary<string, string?> RouteValues { get; }  
+
+   // ...
+}
+//----------------------------------------------------------------------Ʌ
+
+//--------------------------------------------------------------------------V
+public class ControllerModel : ICommonModel, IFilterModel, IApiExplorerModel
+{
+   public ControllerModel(TypeInfo controllerType, IReadOnlyList<object> attributes)
+   {
+       ControllerType = controllerType;
+ 
+       Actions = new List<ActionModel>();
+       ApiExplorer = new ApiExplorerModel();
+       Attributes = new List<object>(attributes);
+       ControllerProperties = new List<PropertyModel>();
+       Filters = new List<IFilterMetadata>();
+       Properties = new Dictionary<object, object?>();
+       RouteValues = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+       Selectors = new List<SelectorModel>();
+   }
+
+   public ControllerModel(ControllerModel other) { ... }
+
+   public IList<ActionModel> Actions { get; }  // contains a list of ActionModel
+
+   public ApiExplorerModel ApiExplorer { get; set; }
+
+   public ApplicationModel? Application { get; set; }
+
+   public IReadOnlyList<object> Attributes { get; }
+
+   public string ControllerName { get; set; }
+
+   public TypeInfo ControllerType { get; }
+
+   public IList<IFilterMetadata> Filters { get; }  // <--------------------contains Filters of current Controller, note that thoese Filter instances are created by the compiler
+
+   public IDictionary<string, string?> RouteValues { get; }
+
+   // ...
+}
+//--------------------------------------------------------------------------Ʌ
+
+//------------------------------------------------------------------------V
+internal class DefaultApplicationModelProvider : IApplicationModelProvider    // <---------------------------------d5
+{
+   private readonly MvcOptions _mvcOptions;   //<----------------
+   private readonly IModelMetadataProvider _modelMetadataProvider;
+   private readonly Func<ActionContext, bool> _supportsAllRequests;
+   private readonly Func<ActionContext, bool> _supportsNonGetRequests;
+
+   public DefaultApplicationModelProvider(IOptions<MvcOptions> mvcOptionsAccessor, IModelMetadataProvider modelMetadataProvider)
+   {
+      _mvcOptions = mvcOptionsAccessor.Value;
+      _modelMetadataProvider = modelMetadataProvider;
+ 
+      _supportsAllRequests = _ => true;
+      _supportsNonGetRequests = context => !HttpMethods.IsGet(context.HttpContext.Request.Method);
+   }
+
+   public int Order => -1000;
+
+   public void OnProvidersExecuting(ApplicationModelProviderContext context)
+   {
+      foreach (var filter in _mvcOptions.Filters)
+      {
+         context.Result.Filters.Add(filter);
+      }
+
+      foreach (var controllerType in context.ControllerTypes)
+      {
+         var controllerModel = CreateControllerModel(controllerType);   // <--------------------------------------------d5.3
+         if (controllerModel == null)
+            continue;
+         
+         context.Result.Controllers.Add(controllerModel);               // <--------------------------------------------d5.4
+         controllerModel.Application = context.Result;
+
+         foreach (var propertyHelper in PropertyHelper.GetProperties(controllerType.AsType()))
+         {
+            var propertyInfo = propertyHelper.Property;
+            var propertyModel = CreatePropertyModel(propertyInfo);
+            if (propertyModel != null)
+            {
+               propertyModel.Controller = controllerModel;
+               controllerModel.ControllerProperties.Add(propertyModel);
+            }
+         }
+
+         foreach (var methodInfo in controllerType.AsType().GetMethods())
+         {
+            var actionModel = CreateActionModel(controllerType, methodInfo);
+            if (actionModel == null)
+               continue;
+ 
+            actionModel.Controller = controllerModel;
+            controllerModel.Actions.Add(actionModel);
+ 
+            foreach (var parameterInfo in actionModel.ActionMethod.GetParameters())
+            {
+               var parameterModel = CreateParameterModel(parameterInfo);
+               if (parameterModel != null)
+               {
+                  parameterModel.Action = actionModel;
+                  actionModel.Parameters.Add(parameterModel);
+               }
+            }
+         }
+      }
+   }
+
+   public void OnProvidersExecuted(ApplicationModelProviderContext context)
+   {
+      // Intentionally empty.
+   }
+
+   private static void AddRange<T>(IList<T> list, IEnumerable<T> items)
+   {
+      foreach (var item in items)
+      {
+         list.Add(item);
+      }
+   }
+
+   internal static ControllerModel CreateControllerModel(TypeInfo typeInfo)
+   {
+      var currentTypeInfo = typeInfo;
+      var objectTypeInfo = typeof(object).GetTypeInfo();
+
+      IRouteTemplateProvider[] routeAttributes;
+
+      do
+      {
+         routeAttributes = currentTypeInfo
+            .GetCustomAttributes(inherit: false)
+            .OfType<IRouteTemplateProvider>()
+            .ToArray();
+
+         if (routeAttributes.Length > 0)
+            break;
+         
+         currentTypeInfo = currentTypeInfo.BaseType!.GetTypeInfo();
+      }
+      while (currentTypeInfo != objectTypeInfo);
+
+      var attributes = typeInfo.GetCustomAttributes(inherit: true);
+
+      var filteredAttributes = new List<object>();
+      foreach (var attribute in attributes)
+      {
+         if (attribute is IRouteTemplateProvider)
+         {
+            // This attribute is a route-attribute, leave it out.
+         }
+         else
+         {
+            filteredAttributes.Add(attribute);
+         }
+      }
+
+      filteredAttributes.AddRange(routeAttributes);
+
+      attributes = filteredAttributes.ToArray();
+
+      var controllerModel = new ControllerModel(typeInfo, attributes);
+
+      AddRange(controllerModel.Selectors, CreateSelectors(attributes));
+
+      controllerModel.ControllerName = typeInfo.Name.EndsWith("Controller", StringComparison.OrdinalIgnoreCase) ? 
+                                       typeInfo.Name.Substring(0, typeInfo.Name.Length - "Controller".Length) : typeInfo.Name;
+
+      AddRange(controllerModel.Filters, attributes.OfType<IFilterMetadata>());    // <--------------------------------------------d5.1,  get all Filters of this Controller
+
+      foreach (var routeValueProvider in attributes.OfType<IRouteValueProvider>())   
+      {
+         controllerModel.RouteValues.Add(routeValueProvider.RouteKey, routeValueProvider.RouteValue);
+      }
+
+      // ...
+
+      if (typeof(IAsyncActionFilter).GetTypeInfo().IsAssignableFrom(typeInfo) || typeof(IActionFilter).GetTypeInfo().IsAssignableFrom(typeInfo))
+      {
+         controllerModel.Filters.Add(new ControllerActionFilter());
+      }
+
+      if (typeof(IAsyncResultFilter).GetTypeInfo().IsAssignableFrom(typeInfo) || typeof(IResultFilter).GetTypeInfo().IsAssignableFrom(typeInfo))
+      {
+         controllerModel.Filters.Add(new ControllerResultFilter());
+      }
+
+      return controllerModel;    // <--------------------------------------------d5.2, return ControllerModel
+   }
+
+   internal PropertyModel CreatePropertyModel(PropertyInfo propertyInfo)
+   {
+      var attributes = propertyInfo.GetCustomAttributes(inherit: true);
+
+      var declaringType = propertyInfo.DeclaringType!;
+      var modelMetadata = _modelMetadataProvider.GetMetadataForProperty(declaringType, propertyInfo.Name);
+      var bindingInfo = BindingInfo.GetBindingInfo(attributes, modelMetadata);
+
+      if (bindingInfo == null)
+      {
+         // Look for BindPropertiesAttribute on the handler type if no BindingInfo was inferred for the property.
+         // This allows a user to enable model binding on properties by decorating the controller type with BindPropertiesAttribute.
+         var bindPropertiesAttribute = declaringType.GetCustomAttribute<BindPropertiesAttribute>(inherit: true);
+         if (bindPropertiesAttribute != null)
+         {
+            var requestPredicate = bindPropertiesAttribute.SupportsGet ? _supportsAllRequests : _supportsNonGetRequests;
+            bindingInfo = new BindingInfo { RequestPredicate = requestPredicate };
+         }
+      }
+ 
+      var propertyModel = new PropertyModel(propertyInfo, attributes) 
+      {
+         PropertyName = propertyInfo.Name,
+         BindingInfo = bindingInfo,
+      };
+ 
+      return propertyModel;
+   }
+
+   internal ActionModel CreateActionModel(TypeInfo typeInfo, MethodInfo methodInfo)
+   {
+      if (!IsAction(typeInfo, methodInfo))
+      {
+         return null;
+      }
+
+      var attributes = methodInfo.GetCustomAttributes(inherit: true);
+      var actionModel = new ActionModel(methodInfo, attributes);
+      AddRange(actionModel.Filters, attributes.OfType<IFilterMetadata>());   // <--------------------------------------------d5.1,  get all Filters of this Action
+
+      var actionName = attributes.OfType<ActionNameAttribute>().FirstOrDefault();
+      if (actionName?.Name != null)
+      {
+         actionModel.ActionName = actionName.Name;
+      }
+      else
+      {
+         actionModel.ActionName = CanonicalizeActionName(methodInfo.Name);
+      }
+
+      // ...
+
+      foreach (var routeValueProvider in attributes.OfType<IRouteValueProvider>())
+      {
+         actionModel.RouteValues.Add(routeValueProvider.RouteKey, routeValueProvider.RouteValue);
+      }
+
+      var currentMethodInfo = methodInfo;
+ 
+      IRouteTemplateProvider[] routeAttributes;
+
+      while (true)
+      {
+         routeAttributes = currentMethodInfo
+            .GetCustomAttributes(inherit: false)
+            .OfType<IRouteTemplateProvider>()
+            .ToArray();
+ 
+         if (routeAttributes.Length > 0)
+         {
+            // Found 1 or more route attributes.
+            break;
+         }
+ 
+         // GetBaseDefinition returns 'this' when it gets to the bottom of the chain.
+         var nextMethodInfo = currentMethodInfo.GetBaseDefinition();
+         if (currentMethodInfo == nextMethodInfo)
+         {
+            break;
+         }
+ 
+         currentMethodInfo = nextMethodInfo;
+      }
+
+      var applicableAttributes = new List<object>(routeAttributes.Length);
+      foreach (var attribute in attributes)
+      {
+         if (attribute is IRouteTemplateProvider)
+         {
+               // This attribute is a route-attribute, leave it out.
+         }
+         else
+         {
+            applicableAttributes.Add(attribute);
+         }
+      }
+ 
+      applicableAttributes.AddRange(routeAttributes);
+      AddRange(actionModel.Selectors, CreateSelectors(applicableAttributes));
+ 
+      return actionModel;
+   }
+
+   // ...
+}
+//------------------------------------------------------------------------Ʌ
+
 //-------------------------------------V
 public class ActionDescriptorCollection
 {
@@ -385,9 +920,177 @@ public interface IActionDescriptorCollectionProvider
 }
 //--------------------------------------------------Ʌ
 
+//-------------------V
+public class Endpoint  // represents a logical endpoint in an application
+{
+   public Endpoint(RequestDelegate? requestDelegate, EndpointMetadataCollection? metadata, string? displayName)
+   {
+      RequestDelegate = requestDelegate;
+      Metadata = metadata ?? EndpointMetadataCollection.Empty;
+      DisplayName = displayName;
+   }
+
+   public string? DisplayName { get; }
+
+   public EndpointMetadataCollection Metadata { get; }
+
+   public RequestDelegate? RequestDelegate { get; }
+
+   public override string? ToString() => DisplayName ?? base.ToString();
+}
+//-------------------Ʌ
+
+//--------------------------------------V
+public abstract class EndpointDataSource   // provides a collection of Endpoint instances
+{
+   public abstract IChangeToken GetChangeToken();
+
+   public abstract IReadOnlyList<Endpoint> Endpoints { get; }
+
+   public virtual IReadOnlyList<Endpoint> GetGroupedEndpoints(RouteGroupContext context)
+   {
+      var endpoints = Endpoints;
+      var wrappedEndpoints = new RouteEndpoint[endpoints.Count];
+
+      for (int i = 0; i < endpoints.Count; i++)
+      {
+         var endpoint = endpoints[i];
+
+         if (endpoint is not RouteEndpoint routeEndpoint)
+         {
+            throw new NotSupportedException(Resources.FormatMapGroup_CustomEndpointUnsupported(endpoint.GetType()));
+         }
+
+         var fullRoutePattern = RoutePatternFactory.Combine(context.Prefix, routeEndpoint.RoutePattern);
+         var routeEndpointBuilder = new RouteEndpointBuilder(routeEndpoint.RequestDelegate, fullRoutePattern, routeEndpoint.Order)
+         {
+            DisplayName = routeEndpoint.DisplayName,
+            ApplicationServices = context.ApplicationServices
+         }
+
+         foreach (var convention in context.Conventions)
+         {
+            convention(routeEndpointBuilder);
+         }
+
+         foreach (var metadata in routeEndpoint.Metadata)
+         {
+            routeEndpointBuilder.Metadata.Add(metadata);
+         }
+
+         foreach (var finallyConvention in context.FinallyConventions)
+         {
+            finallyConvention(routeEndpointBuilder);
+         }
+
+         wrappedEndpoints[i] = (RouteEndpoint)routeEndpointBuilder.Build();
+      }
+
+      return wrappedEndpoints;
+   }
+
+   // ...
+}
+//--------------------------------------Ʌ
+
+//--------------------------------------------------V
+internal abstract class ActionEndpointDataSourceBase : EndpointDataSource, IDisposable
+{
+   private readonly IActionDescriptorCollectionProvider _actions;    // <------------------------------------d1+
+
+   protected readonly object Lock = new object();
+
+   protected readonly List<Action<EndpointBuilder>> Conventions;
+   protected readonly List<Action<EndpointBuilder>> FinallyConventions;
+
+   private List<Endpoint>? _endpoints;
+   private CancellationTokenSource? _cancellationTokenSource;
+   private IChangeToken? _changeToken;
+   private IDisposable? _disposable;
+
+   public ActionEndpointDataSourceBase(IActionDescriptorCollectionProvider actions)
+   {
+      _actions = actions;
+ 
+      Conventions = new List<Action<EndpointBuilder>>();
+      FinallyConventions = new List<Action<EndpointBuilder>>();
+   }
+
+   public override IReadOnlyList<Endpoint> Endpoints
+   {
+      get {
+         Initialize();
+         return _endpoints;
+      }
+   }
+
+   public override IReadOnlyList<Endpoint> GetGroupedEndpoints(RouteGroupContext context)
+   {
+      return CreateEndpoints(
+         context.Prefix,
+         _actions.ActionDescriptors.Items,
+         Conventions,
+         context.Conventions,
+         FinallyConventions,
+         context.FinallyConventions);
+   }
+
+   protected abstract List<Endpoint> CreateEndpoints(
+      RoutePattern? groupPrefix,
+      IReadOnlyList<ActionDescriptor> actions,
+      IReadOnlyList<Action<EndpointBuilder>> conventions,
+      IReadOnlyList<Action<EndpointBuilder>> groupConventions,
+      IReadOnlyList<Action<EndpointBuilder>> finallyConventions,
+      IReadOnlyList<Action<EndpointBuilder>> groupFinallyConventions);
+
+   protected void Subscribe()
+   {
+      if (_actions is ActionDescriptorCollectionProvider collectionProviderWithChangeToken)
+      {
+         _disposable = ChangeToken.OnChange(
+            () => collectionProviderWithChangeToken.GetChangeToken(),
+            UpdateEndpoints);
+      }
+   }
+
+   private void Initialize()
+   {
+      // ...
+      UpdateEndpoints();
+   }
+
+   private void UpdateEndpoints()
+   {
+      lock (Lock)
+      {
+         var endpoints = CreateEndpoints(
+            groupPrefix: null,
+            _actions.ActionDescriptors.Items,
+            conventions: Conventions,
+            groupConventions: Array.Empty<Action<EndpointBuilder>>(),
+            finallyConventions: FinallyConventions,
+            groupFinallyConventions: Array.Empty<Action<EndpointBuilder>>());
+
+         // step 1 - capture old token
+         var oldCancellationTokenSource = _cancellationTokenSource;
+ 
+         // step 2 - update endpoints
+         _endpoints = endpoints;
+ 
+         // step 3 - create new change token
+         _cancellationTokenSource = new CancellationTokenSource();
+         _changeToken = new CancellationChangeToken(_cancellationTokenSource.Token);
+ 
+         // step 4 - trigger old token
+         oldCancellationTokenSource?.Cancel();
+      }
+   }
+}
+//--------------------------------------------------Ʌ
+
 //-------------------------------------------------------------------------------------V
 internal sealed class ControllerActionEndpointDataSource : ActionEndpointDataSourceBase     // <--------------------------------a2
-{
+{                                                                                       // <----------d1, ActionEndpointDataSourceBase contains IActionDescriptorCollectionProvider
    private readonly ActionEndpointFactory _endpointFactory;
    private readonly OrderedEndpointsSequenceProvider _orderSequence;
    private readonly List<ConventionalRouteEntry> _routes;
@@ -639,33 +1342,51 @@ internal sealed class ActionEndpointFactory
  
          if (invokerFactory == null)
          {
-            invokerFactory = context.RequestServices.GetRequiredService<IActionInvokerFactory>();  // <----------------------
-         }
+            invokerFactory = context.RequestServices.GetRequiredService<IActionInvokerFactory>();  // <-------------------------
+         }                                                                                        
  
-         var invoker = invokerFactory.CreateInvoker(actionContext);
-         return invoker.InvokeAsync();
-      };
+         var invoker = invokerFactory.CreateInvoker(actionContext);   // <----------------------------------------------------f1
+         
+         // invoker is ControllerActionInvoker
+         return invoker.InvokeAsync();                                // <----------------------------------------------------f1.4
+      };                                                              
    }
 }
 //-----------------------------------------Ʌ
 
-//----------------------------------------------------------------V
-internal sealed class ActionInvokerFactory : IActionInvokerFactory
+
+//-------------------------------------------------filter related-----------------------------------------------------------------------------------------------------------
+
+public class ActionInvokerProviderContext
 {
-   private readonly IActionInvokerProvider[] _actionInvokerProviders;
+   public ActionInvokerProviderContext(ActionContext actionContext)
+   {
+      ActionContext = actionContext;
+   }
+
+   public ActionContext ActionContext { get; }
+   
+   public IActionInvoker? Result { get; set; }
+}
+
+//----------------------------------------------------------------V
+internal sealed class ActionInvokerFactory : IActionInvokerFactory      // <---------------------------------------------f1
+{
+   private readonly IActionInvokerProvider[] _actionInvokerProviders;   // <----------------------------f1.1
+                                                                        // rely on ControllerActionInvokerProvider to set IActionInvoker to ActionInvokerProviderContext
 
    public ActionInvokerFactory(IEnumerable<IActionInvokerProvider> actionInvokerProviders)
    {
       _actionInvokerProviders = actionInvokerProviders.OrderBy(item => item.Order).ToArray();
    }
  
-   public IActionInvoker CreateInvoker(ActionContext actionContext)
+   public IActionInvoker CreateInvoker(ActionContext actionContext)    // creates ControllerActionInvoker
    {
-      var context = new ActionInvokerProviderContext(actionContext);
+      var context = new ActionInvokerProviderContext(actionContext);   
  
       foreach (var provider in _actionInvokerProviders)
       {
-         provider.OnProvidersExecuting(context);
+         provider.OnProvidersExecuting(context);                       // <----------------------------f1.2+                
       }
  
       for (var i = _actionInvokerProviders.Length - 1; i >= 0; i--)
@@ -673,7 +1394,7 @@ internal sealed class ActionInvokerFactory : IActionInvokerFactory
           _actionInvokerProviders[i].OnProvidersExecuted(context);
       }
  
-      return context.Result;
+      return context.Result;    // <----------------------------f1.3
    }
 }
 //----------------------------------------------------------------Ʌ
@@ -723,7 +1444,7 @@ internal struct FilterCursor
 //--------------------------Ʌ
 
 //---------------------------------------------V
-internal abstract partial class ResourceInvoker
+internal abstract partial class ResourceInvoker                    // <------------------------------ f2.3a
 {
    protected readonly DiagnosticListener _diagnosticListener;
    protected readonly ILogger _logger;
@@ -928,8 +1649,7 @@ internal abstract partial class ResourceInvoker
       }
    }
 }
-//---------------------------------------------Ʌ
-
+/*
 private enum Scope
 {
    Invoker,
@@ -980,314 +1700,11 @@ private enum State
    ResultEnd,
    InvokeEnd,
 }
+*/
 //---------------------------------------------Ʌ
 
-
-//------------------------------------------------V
-internal sealed class ControllerActionInvokerCache
-{
-   private readonly ParameterBinder _parameterBinder;
-   private readonly IModelBinderFactory _modelBinderFactory;
-   private readonly IModelMetadataProvider _modelMetadataProvider;
-   private readonly IFilterProvider[] _filterProviders;
-   private readonly IControllerFactoryProvider _controllerFactoryProvider;
-   private readonly MvcOptions _mvcOptions;
-
-   public ControllerActionInvokerCache(
-      ParameterBinder parameterBinder,
-      IModelBinderFactory modelBinderFactory,
-      IModelMetadataProvider modelMetadataProvider,
-      IEnumerable<IFilterProvider> filterProviders,
-      IControllerFactoryProvider factoryProvider,
-      IOptions<MvcOptions> mvcOptions)
-   {
-      _parameterBinder = parameterBinder;
-      _modelBinderFactory = modelBinderFactory;
-      _modelMetadataProvider = modelMetadataProvider;
-      _filterProviders = filterProviders.OrderBy(item => item.Order).ToArray();
-       _controllerFactoryProvider = factoryProvider;
-      _mvcOptions = mvcOptions.Value;
-   }
-
-   public (ControllerActionInvokerCacheEntry cacheEntry, IFilterMetadata[] filters) GetCachedResult(ControllerContext controllerContext)
-   {
-      var actionDescriptor = controllerContext.ActionDescriptor;
-      IFilterMetadata[] filters;
-      var cacheEntry = actionDescriptor.CacheEntry;
-
-      if (cacheEntry is null)
-      {
-         var filterFactoryResult = FilterFactory.GetAllFilters(_filterProviders, controllerContext);
-         filters = filterFactoryResult.Filters;
-
-         var parameterDefaultValues = ParameterDefaultValues.GetParameterDefaultValues(actionDescriptor.MethodInfo);
-
-         var objectMethodExecutor = ObjectMethodExecutor.Create(
-            actionDescriptor.MethodInfo,
-            actionDescriptor.ControllerTypeInfo,
-            parameterDefaultValues);
-
-         var controllerFactory = _controllerFactoryProvider.CreateControllerFactory(actionDescriptor);
-         var controllerReleaser = _controllerFactoryProvider.CreateAsyncControllerReleaser(actionDescriptor);
-         var propertyBinderFactory = ControllerBinderDelegateProvider.CreateBinderDelegate(
-            _parameterBinder,
-            _modelBinderFactory,
-            _modelMetadataProvider,
-            actionDescriptor,
-            _mvcOptions);
-         
-         var actionMethodExecutor = ActionMethodExecutor.GetExecutor(objectMethodExecutor);
-         var filterExecutor = actionDescriptor.FilterDelegate is not null ? ActionMethodExecutor.GetFilterExecutor(actionDescriptor) : null;
-
-         cacheEntry = new ControllerActionInvokerCacheEntry(
-            filterFactoryResult.CacheableFilters,
-            controllerFactory,
-            controllerReleaser,
-            propertyBinderFactory,
-            objectMethodExecutor,
-            filterExecutor ?? actionMethodExecutor,
-            actionMethodExecutor);
-
-         actionDescriptor.CacheEntry = cacheEntry;
-      }
-      else 
-      {
-         // filter instances from statically defined filter descriptors + from filter providers
-         filters = FilterFactory.CreateUncachedFilters(_filterProviders, controllerContext, cacheEntry.CachedFilters);
-      }
-
-      return (cacheEntry, filters);
-   }
-}
-//------------------------------------------------Ʌ
-
-//---------------------------------V
-internal static class FilterFactory
-{
-   public static FilterFactoryResult GetAllFilters(IFilterProvider[] filterProviders, ActionContext actionContext)
-   {
-      var actionDescriptor = actionContext.ActionDescriptor;
-      var staticFilterItems = new FilterItem[actionDescriptor.FilterDescriptors.Count];
-      var orderedFilters = actionDescriptor.FilterDescriptors.OrderBy(filter => filter,FilterDescriptorOrderComparer.Comparer).ToList();
-
-      for (var i = 0; i < orderedFilters.Count; i++)
-      {
-         staticFilterItems[i] = new FilterItem(orderedFilters[i]);
-      }
-
-      var allFilterItems = new List<FilterItem>(staticFilterItems);
-
-      // execute the filter factory to determine which static filters can be cached
-      var filters = CreateUncachedFiltersCore(filterProviders, actionContext, allFilterItems);
-
-      // Cache the filter items based on the following criteria
-      // 1. Are created statically (ex: via filter attributes, added to global filter list etc.)
-      // 2. Are re-usable
-      var allFiltersAreReusable = true;
-      for (var i = 0; i < staticFilterItems.Length; i++)
-      {
-         var item = staticFilterItems[i];
-         if (!item.IsReusable)
-         {
-            item.Filter = null;
-            allFiltersAreReusable = false;
-         }
-      }
-
-      if (allFiltersAreReusable && filterProviders.Length == 1 && filterProviders[0] is DefaultFilterProvider defaultFilterProvider)
-      {
-         // if we know we can safely cache all filters and only the default filter provider is registered, we can probably re-use filters between requests.
-         actionDescriptor.CachedReusableFilters = filters;
-      }
-
-      return new FilterFactoryResult(staticFilterItems, filters);
-   }
-
-   public static IFilterMetadata[] CreateUncachedFilters(IFilterProvider[] filterProviders, ActionContext actionContext, FilterItem[] cachedFilterItems)
-   {
-      if (actionContext.ActionDescriptor.CachedReusableFilters is { } cached)
-      {
-         return cached;
-      }
-
-      // deep copy the cached filter items as filter providers could modify them
-      var filterItems = new List<FilterItem>(cachedFilterItems.Length);
-      for (var i = 0; i < cachedFilterItems.Length; i++)
-      {
-         var filterItem = cachedFilterItems[i];
-         filterItems.Add(new FilterItem(filterItem.Descriptor) { Filter = filterItem.Filter, IsReusable = filterItem.IsReusable });
-      }
-
-      return CreateUncachedFiltersCore(filterProviders, actionContext, filterItems);
-   }
-
-   private static IFilterMetadata[] CreateUncachedFiltersCore(IFilterProvider[] filterProviders, ActionContext actionContext, List<FilterItem> filterItems)
-   {
-      // execute providers
-      var context = new FilterProviderContext(actionContext, filterItems);
-
-      for (var i = 0; i < filterProviders.Length; i++)
-      {
-         filterProviders[i].OnProvidersExecuting(context);
-      }
-
-      for (var i = filterProviders.Length - 1; i >= 0; i--)
-      {
-         filterProviders[i].OnProvidersExecuted(context);
-      }
-
-      // extract filter instances from statically defined filters and filter providers
-      var count = 0;
-      for (var i = 0; i < filterItems.Count; i++)
-      {
-         if (filterItems[i].Filter != null)
-         {
-            count++;
-         }
-      }
-
-      if (count == 0)
-      {
-         return Array.Empty<IFilterMetadata>();
-      }
-      else 
-      {
-         var filters = new IFilterMetadata[count];
-         var filterIndex = 0;
-         for (int i = 0; i < filterItems.Count; i++)
-         {
-            var filter = filterItems[i].Filter;
-            if (filter != null)
-            {
-               filters[filterIndex++] = filter;
-            }
-         }
-
-         return filters;
-      }
-   }
-}
-//---------------------------------Ʌ
-
-//-----------------------------------------V
-internal sealed class DefaultFilterProvider : IFilterProvider
-{
-   public int Order => -1000;
-
-   public void OnProvidersExecuting(FilterProviderContext context)
-   {
-      if (context.ActionContext.ActionDescriptor.FilterDescriptors != null)
-      {
-         var results = context.Results;
-         var resultsCount = results.Count;
-         for (var i = 0; i < resultsCount; i++)
-         {
-            ProvideFilter(context, results[i]);
-         }
-      }
-   }
-
-   public void OnProvidersExecuted(FilterProviderContext context)
-   {
-
-   }
-
-   public static void ProvideFilter(FilterProviderContext context, FilterItem filterItem)
-   {
-      if (filterItem.Filter != null)
-      {
-         return;
-      }
-
-      var filter = filterItem.Descriptor.Filter;
-
-      if (filter is not IFilterFactory filterFactory)
-      {
-         filterItem.Filter = filter;
-         filterItem.IsReusable = true;
-      }
-      else
-      {
-         var services = context.ActionContext.HttpContext.RequestServices;
-         filterItem.Filter = filterFactory.CreateInstance(services);
-         filterItem.IsReusable = filterFactory.IsReusable;
-
-         if (filterItem.Filter == null)
-         {
-            throw new InvalidOperationException(Resources.FormatTypeMethodMustReturnNotNullValue("CreateInstance", typeof(IFilterFactory).Name));
-         }
-
-         ApplyFilterToContainer(filterItem.Filter, filterFactory);
-      }
-   }
-
-   private static void ApplyFilterToContainer(object actualFilter, IFilterMetadata filterMetadata)
-   {
-      if (actualFilter is IFilterContainer container)
-      {
-         container.FilterDefinition = filterMetadata;
-      }
-   }
-}
-//-----------------------------------------Ʌ
-
-//----------------------------------------------------------------------------V
-internal sealed class ControllerActionInvokerProvider : IActionInvokerProvider
-{
-   private readonly ControllerActionInvokerCache _controllerActionInvokerCache;
-   private readonly IReadOnlyList<IValueProviderFactory> _valueProviderFactories;
-   private readonly int _maxModelValidationErrors;
-   private readonly ILogger _logger;
-   private readonly DiagnosticListener _diagnosticListener;
-   private readonly IActionResultTypeMapper _mapper;
-   private readonly IActionContextAccessor _actionContextAccessor;
-
-   public ControllerActionInvokerProvider(
-        ControllerActionInvokerCache controllerActionInvokerCache,
-        IOptions<MvcOptions> optionsAccessor,
-        ILoggerFactory loggerFactory,
-        DiagnosticListener diagnosticListener,
-        IActionResultTypeMapper mapper,
-        IActionContextAccessor? actionContextAccessor)
-   {
-      _controllerActionInvokerCache = controllerActionInvokerCache;
-      _valueProviderFactories = optionsAccessor.Value.ValueProviderFactories.ToArray();
-      _maxModelValidationErrors = optionsAccessor.Value.MaxModelValidationErrors;
-      _logger = loggerFactory.CreateLogger<ControllerActionInvoker>();
-      _diagnosticListener = diagnosticListener;
-      _mapper = mapper;
-      _actionContextAccessor = actionContextAccessor ?? ActionContextAccessor.Null;
-   }
-
-   public int Order => -1000;
-
-   public void OnProvidersExecuting(ActionInvokerProviderContext context)
-   {
-      if (context.ActionContext.ActionDescriptor is ControllerActionDescriptor)
-      {
-         var controllerContext = new ControllerContext(context.ActionContext)
-         {
-            ValueProviderFactories = new CopyOnWriteList<IValueProviderFactory>(_valueProviderFactories)
-         };
-         controllerContext.ModelState.MaxAllowedErrors = _maxModelValidationErrors;
- 
-         var (cacheEntry, filters) = _controllerActionInvokerCache.GetCachedResult(controllerContext);   // <---------------------------
- 
-         var invoker = new ControllerActionInvoker(_logger, _diagnosticListener, _actionContextAccessor, _mapper, controllerContext, cacheEntry, filters);
- 
-         context.Result = invoker;
-      }
-   }
-
-   public void OnProvidersExecuted(ActionInvokerProviderContext context)
-   {
-
-   }
-}
-//----------------------------------------------------------------------------Ʌ
-
 //--------------------------------------------V
-internal partial class ControllerActionInvoker : ResourceInvoker, IActionInvoker 
+internal partial class ControllerActionInvoker : ResourceInvoker, IActionInvoker    // <-----------------------f2.3b
 {
    private readonly ControllerActionInvokerCacheEntry _cacheEntry;
    private readonly ControllerContext _controllerContext;
@@ -1535,6 +1952,7 @@ internal partial class ControllerActionInvoker : ResourceInvoker, IActionInvoker
    }
 }
 
+/*
 private enum Scope
 {
    Invoker,
@@ -1552,7 +1970,346 @@ private enum State
    ActionInside,
    ActionEnd,
 }
-//--------------------------------------------Ʌ
+*/
+//---------------------------------------------Ʌ
+
+//------------------------------------------------V
+internal sealed class ControllerActionInvokerCache                // <---------------------------------f3
+{
+   private readonly ParameterBinder _parameterBinder;
+   private readonly IModelBinderFactory _modelBinderFactory;
+   private readonly IModelMetadataProvider _modelMetadataProvider;
+   private readonly IFilterProvider[] _filterProviders;
+   private readonly IControllerFactoryProvider _controllerFactoryProvider;
+   private readonly MvcOptions _mvcOptions;
+
+   public ControllerActionInvokerCache(
+      ParameterBinder parameterBinder,
+      IModelBinderFactory modelBinderFactory,
+      IModelMetadataProvider modelMetadataProvider,
+      IEnumerable<IFilterProvider> filterProviders,
+      IControllerFactoryProvider factoryProvider,
+      IOptions<MvcOptions> mvcOptions)
+   {
+      _parameterBinder = parameterBinder;
+      _modelBinderFactory = modelBinderFactory;
+      _modelMetadataProvider = modelMetadataProvider;
+      _filterProviders = filterProviders.OrderBy(item => item.Order).ToArray();
+      _controllerFactoryProvider = factoryProvider;
+     _mvcOptions = mvcOptions.Value;
+   }
+
+   public (ControllerActionInvokerCacheEntry cacheEntry, IFilterMetadata[] filters) GetCachedResult(ControllerContext controllerContext)
+   {
+      var actionDescriptor = controllerContext.ActionDescriptor;
+      IFilterMetadata[] filters;
+      var cacheEntry = actionDescriptor.CacheEntry;
+
+      if (cacheEntry is null)
+      {
+         var filterFactoryResult = FilterFactory.GetAllFilters(_filterProviders, controllerContext);    // <---------------------------------f3.1+
+         filters = filterFactoryResult.Filters;                                                         // <---------------------------------f3.2
+                                                                                                        // <---------------------------------f4.9
+         var parameterDefaultValues = ParameterDefaultValues.GetParameterDefaultValues(actionDescriptor.MethodInfo);
+
+         var objectMethodExecutor = ObjectMethodExecutor.Create(
+            actionDescriptor.MethodInfo,
+            actionDescriptor.ControllerTypeInfo,
+            parameterDefaultValues);
+
+         var controllerFactory = _controllerFactoryProvider.CreateControllerFactory(actionDescriptor);
+         var controllerReleaser = _controllerFactoryProvider.CreateAsyncControllerReleaser(actionDescriptor);
+         var propertyBinderFactory = ControllerBinderDelegateProvider.CreateBinderDelegate(
+            _parameterBinder,
+            _modelBinderFactory,
+            _modelMetadataProvider,
+            actionDescriptor,
+            _mvcOptions);
+         
+         var actionMethodExecutor = ActionMethodExecutor.GetExecutor(objectMethodExecutor);
+         var filterExecutor = actionDescriptor.FilterDelegate is not null ? ActionMethodExecutor.GetFilterExecutor(actionDescriptor) : null;
+
+         cacheEntry = new ControllerActionInvokerCacheEntry(
+            filterFactoryResult.CacheableFilters,
+            controllerFactory,
+            controllerReleaser,
+            propertyBinderFactory,
+            objectMethodExecutor,
+            filterExecutor ?? actionMethodExecutor,
+            actionMethodExecutor);
+
+         actionDescriptor.CacheEntry = cacheEntry;
+      }
+      else 
+      {
+         // filter instances from statically defined filter descriptors + from filter providers
+         filters = FilterFactory.CreateUncachedFilters(_filterProviders, controllerContext, cacheEntry.CachedFilters);
+      }
+
+      return (cacheEntry, filters);    // <---------------------------------f3.3
+   }
+}
+//------------------------------------------------Ʌ
+
+//--------------------------------V
+public class FilterProviderContext
+{
+   public FilterProviderContext(ActionContext actionContext, IList<FilterItem> items)
+   {
+      ActionContext = actionContext;
+      Results = items;
+   }
+
+   public ActionContext ActionContext { get; set; }
+
+   public IList<FilterItem> Results { get; set; }
+}
+//--------------------------------Ʌ
+
+//-----------------------------------------V
+internal sealed class DefaultFilterProvider : IFilterProvider   // DefaultFilterProvider's purpose is to set Filter instance to FilterItem
+{
+   public int Order => -1000;
+
+   public void OnProvidersExecuting(FilterProviderContext context)
+   {
+      if (context.ActionContext.ActionDescriptor.FilterDescriptors != null)
+      {
+         var results = context.Results;   // results is IList<FilterItem>
+         var resultsCount = results.Count;
+         for (var i = 0; i < resultsCount; i++)
+         {
+            ProvideFilter(context, results[i]);
+         }
+      }
+   }
+
+   public void OnProvidersExecuted(FilterProviderContext context)
+   {
+
+   }
+
+   public static void ProvideFilter(FilterProviderContext context, FilterItem filterItem)  // <--------------------f5
+   {
+      if (filterItem.Filter != null)
+      {
+         return;
+      }
+
+      var filter = filterItem.Descriptor.Filter;
+
+      if (filter is not IFilterFactory filterFactory)                       // <--------------------f5.1
+      {
+         filterItem.Filter = filter;     // assign compiler-created Filter instance to FilterItem, note that compiler created Filter instances exist both in ControllerModel
+                                         // and FilterDescriptor, so the purpose of FilterItem is to "move" Filter instance from FilterDescriptor to itself as a wrapper
+         filterItem.IsReusable = true;   // that's why default Filters are resusable
+      }
+      else
+      {                                                                     // <--------------------f5.1
+         var services = context.ActionContext.HttpContext.RequestServices;
+         filterItem.Filter = filterFactory.CreateInstance(services);
+         filterItem.IsReusable = filterFactory.IsReusable;
+
+         if (filterItem.Filter == null)
+         {
+            throw new InvalidOperationException(Resources.FormatTypeMethodMustReturnNotNullValue("CreateInstance", typeof(IFilterFactory).Name));
+         }
+
+         ApplyFilterToContainer(filterItem.Filter, filterFactory);
+      }
+   }
+
+   /*
+   private static void ApplyFilterToContainer(object actualFilter, IFilterMetadata filterMetadata)  // not important
+   {
+      if (actualFilter is IFilterContainer container)
+      {
+         container.FilterDefinition = filterMetadata;
+      }
+   }
+   */
+}
+//-----------------------------------------Ʌ
+
+//---------------------------------V
+internal static class FilterFactory       // <------------------------------------f4
+{
+   public static FilterFactoryResult GetAllFilters(IFilterProvider[] filterProviders, ActionContext actionContext)   // <--------------------------------f4.1
+   {
+      var actionDescriptor = actionContext.ActionDescriptor;
+      var staticFilterItems = new FilterItem[actionDescriptor.FilterDescriptors.Count];
+
+      // <--------------------------------f4.2, at this stage, ActionContext already contains information about Filters, check Part B
+      var orderedFilters = actionDescriptor.FilterDescriptors.OrderBy(filter => filter, FilterDescriptorOrderComparer.Comparer).ToList();
+
+      for (var i = 0; i < orderedFilters.Count; i++)
+      {
+         staticFilterItems[i] = new FilterItem(orderedFilters[i]);   
+      }
+
+      var allFilterItems = new List<FilterItem>(staticFilterItems);    // <--------------------------------f4.3, wraps FilterDescriptor into FilterItem
+
+      // execute the filter factory to determine which static filters can be cached
+      var filters = CreateUncachedFiltersCore(filterProviders, actionContext, allFilterItems);   // <--------------------------------f4.4
+                                                                                                 // <--------------------------------f4.8
+      // Cache the filter items based on the following criteria
+      // 1. Are created statically (ex: via filter attributes, added to global filter list etc.)
+      // 2. Are re-usable
+      var allFiltersAreReusable = true;
+      for (var i = 0; i < staticFilterItems.Length; i++)
+      {
+         var item = staticFilterItems[i];
+         if (!item.IsReusable)
+         {
+            item.Filter = null;   // FilterItem's Filter property is set to null but FilterDescriptor's Filter property still persist
+            allFiltersAreReusable = false;
+         }
+      }
+
+      if (allFiltersAreReusable && filterProviders.Length == 1 && filterProviders[0] is DefaultFilterProvider defaultFilterProvider)
+      {
+         // if we know we can safely cache all filters and only the default filter provider is registered, we can probably re-use filters between requests.
+         actionDescriptor.CachedReusableFilters = filters;   // <----------------------------------
+      }
+
+      return new FilterFactoryResult(staticFilterItems, filters);   // staticFilterItems is FilterItem[], filters is IFilterMetadata[]   // <--------------------------------f4.9
+   }
+
+   public static IFilterMetadata[] CreateUncachedFilters(IFilterProvider[] filterProviders, ActionContext actionContext, FilterItem[] cachedFilterItems)
+   {
+      if (actionContext.ActionDescriptor.CachedReusableFilters is { } cached)
+      {
+         return cached;
+      }
+
+      // deep copy the cached filter items as filter providers could modify them
+      var filterItems = new List<FilterItem>(cachedFilterItems.Length);
+      for (var i = 0; i < cachedFilterItems.Length; i++)
+      {
+         var filterItem = cachedFilterItems[i];
+         filterItems.Add(new FilterItem(filterItem.Descriptor) { Filter = filterItem.Filter, IsReusable = filterItem.IsReusable });
+      }
+
+      return CreateUncachedFiltersCore(filterProviders, actionContext, filterItems);
+   }
+
+   private static IFilterMetadata[] CreateUncachedFiltersCore(IFilterProvider[] filterProviders, ActionContext actionContext, List<FilterItem> filterItems) // <-------------f4.4
+   {                                                                                                                                  // IFilterProvider is DefaultFilterProvider
+      // execute providers
+      var context = new FilterProviderContext(actionContext, filterItems);   // wrap List<FilterItem> into FilterProviderContext
+
+      for (var i = 0; i < filterProviders.Length; i++)
+      {
+         filterProviders[i].OnProvidersExecuting(context);    // <------------------------------f4.5+
+      }
+
+      for (var i = filterProviders.Length - 1; i >= 0; i--)
+      {
+         filterProviders[i].OnProvidersExecuted(context);
+      }
+
+      // extract filter instances from statically defined filters and filter providers
+      var count = 0;
+      for (var i = 0; i < filterItems.Count; i++)
+      {
+         if (filterItems[i].Filter != null)
+         {
+            count++;
+         }
+      }
+
+      if (count == 0)
+      {
+         return Array.Empty<IFilterMetadata>();
+      }
+      else 
+      {
+         var filters = new IFilterMetadata[count];     // <------------------------------f4.6, assign Filter instance from FilterItem to this new created array
+         var filterIndex = 0;
+         for (int i = 0; i < filterItems.Count; i++)
+         {
+            var filter = filterItems[i].Filter;
+            if (filter != null)
+            {
+               filters[filterIndex++] = filter;
+            }
+         }
+
+         return filters;                               // <------------------------------f4.7, return IFilterMetadata[]
+      }
+   }
+}
+//---------------------------------Ʌ
+
+//---------------------------------------V
+public class ActionInvokerProviderContext
+{
+   public ActionInvokerProviderContext(ActionContext actionContext)
+   {
+      ActionContext = actionContext;
+   }
+
+   public ActionContext ActionContext { get; }
+
+   public IActionInvoker? Result { get; set; }
+}
+//---------------------------------------Ʌ
+
+//----------------------------------------------------------------------------V
+internal sealed class ControllerActionInvokerProvider : IActionInvokerProvider      // <------------------------- f2
+{
+   private readonly ControllerActionInvokerCache _controllerActionInvokerCache;
+   private readonly IReadOnlyList<IValueProviderFactory> _valueProviderFactories;
+   private readonly int _maxModelValidationErrors;
+   private readonly ILogger _logger;
+   private readonly DiagnosticListener _diagnosticListener;
+   private readonly IActionResultTypeMapper _mapper;
+   private readonly IActionContextAccessor _actionContextAccessor;
+
+   public ControllerActionInvokerProvider(
+        ControllerActionInvokerCache controllerActionInvokerCache,
+        IOptions<MvcOptions> optionsAccessor,
+        ILoggerFactory loggerFactory,
+        DiagnosticListener diagnosticListener,
+        IActionResultTypeMapper mapper,
+        IActionContextAccessor? actionContextAccessor)
+   {
+      _controllerActionInvokerCache = controllerActionInvokerCache;
+      _valueProviderFactories = optionsAccessor.Value.ValueProviderFactories.ToArray();
+      _maxModelValidationErrors = optionsAccessor.Value.MaxModelValidationErrors;
+      _logger = loggerFactory.CreateLogger<ControllerActionInvoker>();
+      _diagnosticListener = diagnosticListener;
+      _mapper = mapper;
+      _actionContextAccessor = actionContextAccessor ?? ActionContextAccessor.Null;
+   }
+
+   public int Order => -1000;
+
+   public void OnProvidersExecuting(ActionInvokerProviderContext context)       // <------------------------- f2.1
+   {
+      if (context.ActionContext.ActionDescriptor is ControllerActionDescriptor)
+      {
+         var controllerContext = new ControllerContext(context.ActionContext)   // <-------------------- create ControllerContext instance
+         {
+            ValueProviderFactories = new CopyOnWriteList<IValueProviderFactory>(_valueProviderFactories)
+         };
+         controllerContext.ModelState.MaxAllowedErrors = _maxModelValidationErrors;
+ 
+         var (cacheEntry, filters) = _controllerActionInvokerCache.GetCachedResult(controllerContext);   // <------------------------- f2.2+
+ 
+          // <--------------f2.3  create ControllerActionInvoker instance and supply filter
+         var invoker = new ControllerActionInvoker(_logger, _diagnosticListener, _actionContextAccessor, _mapper, controllerContext, cacheEntry, filters);  // <-------f2.3
+                          
+         context.Result = invoker;
+      }
+   }
+
+   public void OnProvidersExecuted(ActionInvokerProviderContext context)
+   {
+
+   }
+}
+//----------------------------------------------------------------------------Ʌ
 ```
 
 
