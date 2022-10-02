@@ -453,7 +453,7 @@ public static class UseMiddlewareExtensions {
          Array.Copy(args, 0, ctorArgs, 1, args.Length);
 
          // create an instance of the TMiddleware at runtime
-         var instance = ActivatorUtilities.CreateInstance(app.ApplicationServices, middleware, ctorArgs);   // note that we pass as I ServiceProvider created in HostBuilder
+         var instance = ActivatorUtilities.CreateInstance(app.ApplicationServices, middleware, ctorArgs);   // note that we pass as IServiceProvider created in HostBuilder
          //...
          return context => {
             //... need to grasp Expression and understand this part
@@ -463,8 +463,9 @@ public static class UseMiddlewareExtensions {
 }
 ```
 ```C#
-//-----V
-public static class MapExtensions {   // namespace Microsoft.AspNetCore.Builder;
+//-------------------------------V
+public static class MapExtensions    // namespace Microsoft.AspNetCore.Builder;
+{   
    public static IApplicationBuilder Map(this IApplicationBuilder app, PathString pathMatch, Action<IApplicationBuilder> configuration) {
       return Map(app, pathMatch, preserveMatchedPathSegment: false, configuration);
    }
@@ -518,9 +519,11 @@ public class MapMiddleware {  // namespace Microsoft.AspNetCore.Builder.Extensio
       context.Request.Path = path;
    }
 }
-//-----Ʌ
+//-------------------------------Ʌ
 ```
+
 #### Routing 
+
 ```C#
 //-----------------------------------------------------------------------------------------------------------------------------------------V
 public static class EndpointHttpContextExtensions {
@@ -576,18 +579,19 @@ public class ApplicationBuilder : IApplicationBuilder {
       return this;
    }
 
-   public RequestDelegate Build() {
+   public RequestDelegate Build() 
+   {
       RequestDelegate app = context => {   // app is actually the "man-made" delegate after the last delegate
          // ...
          context.Response.StatusCode = StatusCodes.Status404NotFound;
          return Task.CompletedTask;
-      }
-   }
+      };
 
-   for (var c = _components.Count - 1; c >= 0; c--) {   // start with the last Func first
-      app = _components[c](app);
+      for (var c = _components.Count - 1; c >= 0; c--) {   // start with the last Func first
+         app = _components[c](app);
+      }
+      return app;   // return the first user-defined RequestDelegate 
    }
-   return app;   // return the first user-defined RequestDelegate 
 }
 
 public static class UseExtensions {

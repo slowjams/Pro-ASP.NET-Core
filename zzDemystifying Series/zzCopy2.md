@@ -132,16 +132,51 @@ public static class MvcServiceCollectionExtensions
        services.TryAddEnumerable(ServiceDescriptor.Singleton<MatcherPolicy, DynamicControllerEndpointMatcherPolicy>());
        services.TryAddEnumerable(ServiceDescriptor.Singleton<IRequestDelegateFactory, ControllerRequestDelegateFactory>());
 
-       // ...    
+       // random infrastructure
+       services.TryAddSingleton<MvcMarkerService, MvcMarkerService>();
+       services.TryAddSingleton<ITypeActivatorCache, TypeActivatorCache>();
+       services.TryAddSingleton<IUrlHelperFactory, UrlHelperFactory>();
+       services.TryAddSingleton<IHttpRequestStreamReaderFactory, MemoryPoolHttpRequestStreamReaderFactory>();
+       services.TryAddSingleton<IHttpResponseStreamWriterFactory, MemoryPoolHttpResponseStreamWriterFactory>();
+       services.TryAddSingleton(ArrayPool<byte>.Shared);
+       services.TryAddSingleton(ArrayPool<char>.Shared);
+       services.TryAddSingleton<OutputFormatterSelector, DefaultOutputFormatterSelector>();
+       services.TryAddSingleton<IActionResultExecutor<ObjectResult>, ObjectResultExecutor>();
+       services.TryAddSingleton<IActionResultExecutor<PhysicalFileResult>, PhysicalFileResultExecutor>();
+       services.TryAddSingleton<IActionResultExecutor<VirtualFileResult>, VirtualFileResultExecutor>();
+       services.TryAddSingleton<IActionResultExecutor<FileStreamResult>, FileStreamResultExecutor>();
+       services.TryAddSingleton<IActionResultExecutor<FileContentResult>, FileContentResultExecutor>();
+       services.TryAddSingleton<IActionResultExecutor<RedirectResult>, RedirectResultExecutor>();
+       services.TryAddSingleton<IActionResultExecutor<LocalRedirectResult>, LocalRedirectResultExecutor>();
+       services.TryAddSingleton<IActionResultExecutor<RedirectToActionResult>, RedirectToActionResultExecutor>();
+       services.TryAddSingleton<IActionResultExecutor<RedirectToRouteResult>, RedirectToRouteResultExecutor>();
+       services.TryAddSingleton<IActionResultExecutor<RedirectToPageResult>, RedirectToPageResultExecutor>();
+       services.TryAddSingleton<IActionResultExecutor<ContentResult>, ContentResultExecutor>();
+       services.TryAddSingleton<IActionResultExecutor<JsonResult>, SystemTextJsonResultExecutor>();
+       services.TryAddSingleton<IClientErrorFactory, ProblemDetailsClientErrorFactory>();      
+       
+       // middleware pipeline filter related
+       services.TryAddSingleton<MiddlewareFilterConfigurationProvider>();
+       services.TryAddSingleton<MiddlewareFilterBuilder>();
+       services.TryAddEnumerable(ServiceDescriptor.Singleton<IStartupFilter, MiddlewareFilterBuilderStartupFilter>());
+ 
+       // ProblemDetails
+       services.TryAddSingleton<ProblemDetailsFactory, DefaultProblemDetailsFactory>();
+       services.TryAddEnumerable(ServiceDescriptor.Singleton<IProblemDetailsWriter, DefaultApiProblemDetailsWriter>());  
     }
 }
 ```
 
-Part A - (denoted as `a`) Overall
+Part A - (denoted as `o`) Overall
 
-Part B - (denoted as `d`) How Filters information discovered
+Part B - (denoted as `c`) How controller instances are created
 
-Part C - (denoted as `f`) How Filters get executed in pipeline
+Part C - (denoted as `b` and `a`) How Model Binding Works + How Action method Executes
+
+Part D - (denoted as `d`) How Filters information discovered
+
+Part E - (denoted as `f`) How Filters get executed in pipeline
+
 
 ```C#
 public static class ControllerEndpointRouteBuilderExtensions 
@@ -158,7 +193,7 @@ public static class ControllerEndpointRouteBuilderExtensions
       if (dataSource == null) 
       {
          var orderProvider = endpoints.ServiceProvider.GetRequiredService<OrderedEndpointsSequenceProviderCache>();
-         var factory = endpoints.ServiceProvider.GetRequiredService<ControllerActionEndpointDataSourceFactory>();    // <--------------------------- a1
+         var factory = endpoints.ServiceProvider.GetRequiredService<ControllerActionEndpointDataSourceFactory>();    // <--------------------------- o1
          dataSource = factory.Create(orderProvider.GetOrCreateOrderedEndpointsSequenceProvider(endpoints));
          endpoints.DataSources.Add(dataSource);
       }
@@ -176,7 +211,7 @@ public static class ControllerEndpointRouteBuilderExtensions
 
 ```C#
 //-------------------------------------------------------------V
-internal sealed class ControllerActionEndpointDataSourceFactory   // <--------------------------- a1
+internal sealed class ControllerActionEndpointDataSourceFactory   // <--------------------------- o1
 {
    private readonly ControllerActionEndpointDataSourceIdProvider _dataSourceIdProvider;
    private readonly IActionDescriptorCollectionProvider _actions;
@@ -184,7 +219,7 @@ internal sealed class ControllerActionEndpointDataSourceFactory   // <----------
  
    public ControllerActionEndpointDataSourceFactory(
       ControllerActionEndpointDataSourceIdProvider dataSourceIdProvider,
-      IActionDescriptorCollectionProvider actions,     // <--------------------------- b1
+      IActionDescriptorCollectionProvider actions,     
       ActionEndpointFactory factory)                   // <--------------------------- c1
    {
       _dataSourceIdProvider = dataSourceIdProvider;
@@ -194,7 +229,7 @@ internal sealed class ControllerActionEndpointDataSourceFactory   // <----------
  
    public ControllerActionEndpointDataSource Create(OrderedEndpointsSequenceProvider orderProvider)
    {
-       return new ControllerActionEndpointDataSource(_dataSourceIdProvider, _actions, _factory, orderProvider);   // <--------------------------- a2
+       return new ControllerActionEndpointDataSource(_dataSourceIdProvider, _actions, _factory, orderProvider);   // <--------------------------- o2
    }
 }
 //-------------------------------------------------------------Ʌ
@@ -252,7 +287,7 @@ public interface IActionDescriptorProvider
 }
 
 //---------------------------------------------------------------------V
-internal sealed partial class DefaultActionDescriptorCollectionProvider : ActionDescriptorCollectionProvider   // <---------------------------- b2
+internal sealed partial class DefaultActionDescriptorCollectionProvider : ActionDescriptorCollectionProvider   
 {
    private readonly IActionDescriptorProvider[] _actionDescriptorProviders;
    private readonly IActionDescriptorChangeProvider[] _actionDescriptorChangeProviders;
@@ -1089,7 +1124,7 @@ internal abstract class ActionEndpointDataSourceBase : EndpointDataSource, IDisp
 //--------------------------------------------------Ʌ
 
 //-------------------------------------------------------------------------------------V
-internal sealed class ControllerActionEndpointDataSource : ActionEndpointDataSourceBase     // <--------------------------------a2
+internal sealed class ControllerActionEndpointDataSource : ActionEndpointDataSourceBase     // <--------------------------------o2
 {                                                                                       // <----------d1, ActionEndpointDataSourceBase contains IActionDescriptorCollectionProvider
    private readonly ActionEndpointFactory _endpointFactory;
    private readonly OrderedEndpointsSequenceProvider _orderSequence;
@@ -1347,8 +1382,8 @@ internal sealed class ActionEndpointFactory
  
          var invoker = invokerFactory.CreateInvoker(actionContext);   // <----------------------------------------------------f1
          
-         // invoker is ControllerActionInvoker
-         return invoker.InvokeAsync();                                // <----------------------------------------------------f1.4
+         // invoker is ControllerActionInvoker, but InvokeAsync() is from ResourceInvoker
+         return invoker.InvokeAsync();                                // <----------------------------------------------------f1.4, f2.4c_
       };                                                              
    }
 }
@@ -1394,13 +1429,371 @@ internal sealed class ActionInvokerFactory : IActionInvokerFactory      // <----
           _actionInvokerProviders[i].OnProvidersExecuted(context);
       }
  
-      return context.Result;    // <----------------------------f1.3
+      return context.Result;    // <----------------------------f1.3, f2.4b
    }
 }
 //----------------------------------------------------------------Ʌ
 ```
 
+
 ```C#
+//----------------------------------------------------------------------------------------V
+internal interface ITypeActivatorCache
+{
+   TInstance CreateInstance<TInstance>(IServiceProvider serviceProvider, Type optionType);
+}
+
+internal sealed class TypeActivatorCache : ITypeActivatorCache
+{
+   private readonly Func<Type, ObjectFactory> _createFactory = (type) => ActivatorUtilities.CreateFactory(type, Type.EmptyTypes);
+
+   private readonly ConcurrentDictionary<Type, ObjectFactory> _typeActivatorCache = new ConcurrentDictionary<Type, ObjectFactory>();
+
+   public TInstance CreateInstance<TInstance>(IServiceProvider serviceProvider, Type implementationType)
+   {
+      var createFactory = _typeActivatorCache.GetOrAdd(implementationType, _createFactory);   // <---------------------------c7<
+      return (TInstance)createFactory(serviceProvider, arguments: null);
+   }
+}
+//----------------------------------------------------------------------------------------Ʌ
+
+//-----------------------------------------------------------------------------------------------------------------V
+public interface IControllerActivator
+{
+   object Create(ControllerContext context);  // creates a controller
+   
+   void Release(ControllerContext context, object controller);
+
+   ValueTask ReleaseAsync(ControllerContext context, object controller)
+   {
+      Release(context, controller);
+      return default;
+   }
+
+}
+
+//----------------------------------------------VV
+internal sealed class DefaultControllerActivator : IControllerActivator
+{
+   private readonly ITypeActivatorCache _typeActivatorCache;
+
+   public DefaultControllerActivator(ITypeActivatorCache typeActivatorCache)
+   {
+      _typeActivatorCache = typeActivatorCache;
+   }
+
+   public object Create(ControllerContext controllerContext)
+   {
+      var controllerTypeInfo = controllerContext.ActionDescriptor.ControllerTypeInfo;
+
+      var serviceProvider = controllerContext.HttpContext.RequestServices;
+
+      return _typeActivatorCache.CreateInstance<object>(serviceProvider, controllerTypeInfo.AsType());   // <---------------------c6<
+   }
+
+   public void Release(ControllerContext context, object controller)
+   {
+      if (controller is IDisposable disposable)
+      {
+         disposable.Dispose();
+      }
+   }
+
+   public ValueTask ReleaseAsync(ControllerContext context, object controller)
+   {
+      if (controller is IAsyncDisposable asyncDisposable)
+      {
+         return asyncDisposable.DisposeAsync();
+      }
+ 
+      Release(context, controller);
+      return default;
+   }
+//----------------------------------------------ɅɅ
+
+//----------------------------------------------VV
+public interface IControllerFactory
+{
+   object CreateController(ControllerContext context);
+
+   void ReleaseController(ControllerContext context, object controller);
+
+   ValueTask ReleaseControllerAsync(ControllerContext context, object controller)
+   {
+      ReleaseController(context, controller);
+      return default;
+   }
+}
+
+internal sealed class DefaultControllerFactory : IControllerFactory
+{
+   private readonly IControllerActivator _controllerActivator;
+   private readonly IControllerPropertyActivator[] _propertyActivators;
+
+   public DefaultControllerFactory(IControllerActivator controllerActivator, IEnumerable<IControllerPropertyActivator> propertyActivators)
+   {
+      _controllerActivator = controllerActivator;
+      _propertyActivators = propertyActivators.ToArray();
+   }
+
+   public object CreateController(ControllerContext context)
+   {
+      var controller = _controllerActivator.Create(context);
+      foreach (var propertyActivator in _propertyActivators)
+      {
+         propertyActivator.Activate(context, controller);
+      }
+
+      return controller;
+   }
+
+   public void ReleaseController(ControllerContext context, object controller)
+   {
+      _controllerActivator.Release(context, controller);
+   }
+
+   public ValueTask ReleaseControllerAsync(ControllerContext context, object controller)
+   {
+      return _controllerActivator.ReleaseAsync(context, controller);
+   }
+}
+//----------------------------------------------ɅɅ
+
+public interface IControllerFactoryProvider
+{
+   // creates a factory for producing controllers for the specified descriptor
+   Func<ControllerContext, object> CreateControllerFactory(ControllerActionDescriptor descriptor);
+
+   Action<ControllerContext, object>? CreateControllerReleaser(ControllerActionDescriptor descriptor);
+
+   Func<ControllerContext, object, ValueTask>? CreateAsyncControllerReleaser(ControllerActionDescriptor descriptor);
+}
+
+//---------------------------------------------V
+internal sealed class ControllerFactoryProvider : IControllerFactoryProvider
+{
+   private readonly IControllerActivatorProvider _activatorProvider;
+   private readonly Func<ControllerContext, object>? _factoryCreateController;
+   private readonly Action<ControllerContext, object>? _factoryReleaseController;
+   private readonly Func<ControllerContext, object, ValueTask>? _factoryReleaseControllerAsync;
+   private readonly IControllerPropertyActivator[] _propertyActivators;
+
+   public ControllerFactoryProvider(
+      IControllerActivatorProvider activatorProvider,
+      IControllerFactory controllerFactory,
+      IEnumerable<IControllerPropertyActivator> propertyActivators)
+   {
+      _activatorProvider = activatorProvider;
+      if (controllerFactory.GetType() != typeof(DefaultControllerFactory))
+      {
+         _factoryCreateController = controllerFactory.CreateController;
+         _factoryReleaseController = controllerFactory.ReleaseController;
+         _factoryReleaseControllerAsync = controllerFactory.ReleaseControllerAsync;
+      }
+ 
+      _propertyActivators = propertyActivators.ToArray();
+   }
+
+   public Func<ControllerContext, object> CreateControllerFactory(ControllerActionDescriptor descriptor)   // <--------------------c4<
+   {
+      var controllerType = descriptor.ControllerTypeInfo?.AsType();
+      if (_factoryCreateController != null)
+      {
+         return _factoryCreateController;
+      }
+
+      var controllerActivator = _activatorProvider.CreateActivator(descriptor);   // <--------------------c4<
+      var propertyActivators = GetPropertiesToActivate(descriptor);
+
+      object CreateController(ControllerContext controllerContext)
+      {
+         var controller = controllerActivator(controllerContext);
+         for (var i = 0; i < propertyActivators.Length; i++)
+         {
+            var propertyActivator = propertyActivators[i];
+            propertyActivator(controllerContext, controller);
+         }
+ 
+         return controller;
+      }
+
+      return CreateController;
+   }
+
+   public Action<ControllerContext, object>? CreateControllerReleaser(ControllerActionDescriptor descriptor)
+   {
+      var controllerType = descriptor.ControllerTypeInfo?.AsType();
+
+      if (_factoryReleaseController != null)
+      {
+         return _factoryReleaseController;
+      }
+ 
+      return _activatorProvider.CreateReleaser(descriptor);
+   }
+
+   public Func<ControllerContext, object, ValueTask>? CreateAsyncControllerReleaser(ControllerActionDescriptor descriptor)
+   {
+      var controllerType = descriptor.ControllerTypeInfo?.AsType();
+
+      if (_factoryReleaseControllerAsync != null)
+      {
+         return _factoryReleaseControllerAsync;
+      }
+ 
+      return _activatorProvider.CreateAsyncReleaser(descriptor);
+   }
+
+   private Action<ControllerContext, object>[] GetPropertiesToActivate(ControllerActionDescriptor actionDescriptor)
+   {
+      var propertyActivators = new Action<ControllerContext, object>[_propertyActivators.Length];
+      for (var i = 0; i < _propertyActivators.Length; i++)
+      {
+         var activatorProvider = _propertyActivators[i];
+         propertyActivators[i] = activatorProvider.GetActivatorDelegate(actionDescriptor);
+      }
+ 
+      return propertyActivators;
+   }
+}
+//---------------------------------------------Ʌ
+
+//-------------------------------------------V
+public interface IControllerActivatorProvider
+{
+   Func<ControllerContext, object> CreateActivator(ControllerActionDescriptor descriptor);
+
+   Action<ControllerContext, object>? CreateReleaser(ControllerActionDescriptor descriptor);
+
+   Func<ControllerContext, object, ValueTask>? CreateAsyncReleaser(ControllerActionDescriptor descriptor)
+   {
+      var releaser = CreateReleaser(descriptor);
+      if (releaser is null)
+      {
+         return static (_, _) => default;
+      }
+ 
+      return (context, controller) =>
+      {
+         releaser.Invoke(context, controller);
+         return default;
+      };
+   }
+}
+//-------------------------------------------Ʌ
+
+//--------------------------------------V
+public class ControllerActivatorProvider : IControllerActivatorProvider
+{
+   private static readonly Action<ControllerContext, object> _dispose = Dispose;
+   private static readonly Func<ControllerContext, object, ValueTask> _disposeAsync = DisposeAsync;
+   private static readonly Func<ControllerContext, object, ValueTask> _syncDisposeAsync = SyncDisposeAsync;
+   private readonly Func<ControllerContext, object>? _controllerActivatorCreate;
+   private readonly Action<ControllerContext, object>? _controllerActivatorRelease;
+   private readonly Func<ControllerContext, object, ValueTask>? _controllerActivatorReleaseAsync;
+
+   public ControllerActivatorProvider(IControllerActivator controllerActivator)   // <----------------------c5<
+   {
+      if (controllerActivator.GetType() != typeof(DefaultControllerActivator))
+      {
+         _controllerActivatorCreate = controllerActivator.Create;                 // <----------------------c5<
+         _controllerActivatorRelease = controllerActivator.Release;
+         _controllerActivatorReleaseAsync = controllerActivator.ReleaseAsync;
+      }
+   }
+
+   public Func<ControllerContext, object> CreateActivator(ControllerActionDescriptor descriptor)
+   {
+      var controllerType = descriptor.ControllerTypeInfo?.AsType();
+
+      if (_controllerActivatorCreate != null)
+      {
+         return _controllerActivatorCreate;   
+      }
+
+      var typeActivator = ActivatorUtilities.CreateFactory(controllerType, Type.EmptyTypes);
+      return controllerContext => typeActivator(controllerContext.HttpContext.RequestServices, arguments: null);
+   }
+
+   public Action<ControllerContext, object>? CreateReleaser(ControllerActionDescriptor descriptor)
+   {
+      if (_controllerActivatorRelease != null)
+      {
+         return _controllerActivatorRelease;
+      }
+
+      if (typeof(IDisposable).GetTypeInfo().IsAssignableFrom(descriptor.ControllerTypeInfo))
+      {
+         return _dispose;
+      }
+
+      return null;
+   }
+
+   public Func<ControllerContext, object, ValueTask>? CreateAsyncReleaser(ControllerActionDescriptor descriptor)
+   {
+      if (_controllerActivatorReleaseAsync != null)
+      {
+         return _controllerActivatorReleaseAsync;
+      }
+ 
+      if (typeof(IAsyncDisposable).GetTypeInfo().IsAssignableFrom(descriptor.ControllerTypeInfo))
+      {
+         return _disposeAsync;
+      }
+ 
+      if (typeof(IDisposable).GetTypeInfo().IsAssignableFrom(descriptor.ControllerTypeInfo))
+      {
+         return _syncDisposeAsync;
+      }
+ 
+      return null;
+   }
+
+   private static void Dispose(ControllerContext context, object controller)
+   {
+      ((IDisposable)controller).Dispose();
+   }
+
+   // ...
+}
+//--------------------------------------Ʌ
+//-----------------------------------------------------------------------------------------------------------------Ʌ
+```
+
+
+```C#
+//-----------------------------------------------------V
+internal sealed class ControllerActionInvokerCacheEntry
+{
+   internal ControllerActionInvokerCacheEntry(
+      FilterItem[] cachedFilters,
+      Func<ControllerContext, object> controllerFactory,
+      Func<ControllerContext, object, ValueTask>? controllerReleaser,
+      ControllerBinderDelegate? controllerBinderDelegate,
+      ObjectMethodExecutor objectMethodExecutor,
+      ActionMethodExecutor actionMethodExecutor,
+      ActionMethodExecutor innerActionMethodExecutor)
+   {
+      // ...
+   }
+
+   public FilterItem[] CachedFilters { get; }
+
+   public Func<ControllerContext, object> ControllerFactory { get; }   // <--------------------------c2
+
+   public Func<ControllerContext, object, ValueTask>? ControllerReleaser { get; }
+ 
+   public ControllerBinderDelegate? ControllerBinderDelegate { get; }
+ 
+   internal ObjectMethodExecutor ObjectMethodExecutor { get; }
+ 
+   internal ActionMethodExecutor ActionMethodExecutor { get; }
+ 
+   internal ActionMethodExecutor InnerActionMethodExecutor { get; }
+}
+//-----------------------------------------------------Ʌ
+
 //------------------------------------------------V
 internal sealed class ControllerActionInvokerCache                // <---------------------------------f3
 {
@@ -1445,9 +1838,9 @@ internal sealed class ControllerActionInvokerCache                // <----------
             actionDescriptor.ControllerTypeInfo,
             parameterDefaultValues);
 
-         var controllerFactory = _controllerFactoryProvider.CreateControllerFactory(actionDescriptor);
-         var controllerReleaser = _controllerFactoryProvider.CreateAsyncControllerReleaser(actionDescriptor);
-         var propertyBinderFactory = ControllerBinderDelegateProvider.CreateBinderDelegate(
+         var controllerFactory = _controllerFactoryProvider.CreateControllerFactory(actionDescriptor);   // <----------------------c3<
+         var controllerReleaser = _controllerFactoryProvider.CreateAsyncControllerReleaser(actionDescriptor);   
+         var propertyBinderFactory = ControllerBinderDelegateProvider.CreateBinderDelegate(   // <---------------------------------b1.a
             _parameterBinder,
             _modelBinderFactory,
             _modelMetadataProvider,
@@ -1459,14 +1852,14 @@ internal sealed class ControllerActionInvokerCache                // <----------
 
          cacheEntry = new ControllerActionInvokerCacheEntry(
             filterFactoryResult.CacheableFilters,
-            controllerFactory,
+            controllerFactory,                       // <------------------------------c2<
             controllerReleaser,
             propertyBinderFactory,
             objectMethodExecutor,
             filterExecutor ?? actionMethodExecutor,
             actionMethodExecutor);
 
-         actionDescriptor.CacheEntry = cacheEntry;
+         actionDescriptor.CacheEntry = cacheEntry;   // <------------------------------c2<
       }
       else 
       {
@@ -1567,7 +1960,7 @@ internal static class FilterFactory       // <----------------------------------
       var actionDescriptor = actionContext.ActionDescriptor;
       var staticFilterItems = new FilterItem[actionDescriptor.FilterDescriptors.Count];
 
-      // <--------------------------------f4.2, at this stage, ActionContext already contains information about Filters, check Part B
+      // <--------------------------------f4.2, at this stage, ActionContext already contains information about Filters
       var orderedFilters = actionDescriptor.FilterDescriptors.OrderBy(filter => filter, FilterDescriptorOrderComparer.Comparer).ToList();
 
       for (var i = 0; i < orderedFilters.Count; i++)
@@ -1728,7 +2121,7 @@ internal sealed class ControllerActionInvokerProvider : IActionInvokerProvider  
           // <--------------f2.3  create ControllerActionInvoker instance and supply filter
          var invoker = new ControllerActionInvoker(_logger, _diagnosticListener, _actionContextAccessor, _mapper, controllerContext, cacheEntry, filters);  // <-------f2.3
                           
-         context.Result = invoker;
+         context.Result = invoker;    // <-----------------------f2.4a
       }
    }
 
@@ -1813,7 +2206,7 @@ internal abstract partial class ResourceInvoker                    // <---------
 
    protected FilterCursor _cursor;
    protected IActionResult _result;
-   protected object _instance;
+   protected object _instance;   // this field stores Controller instance
 
    public ResourceInvoker(DiagnosticListener diagnosticListener, ILogger logger, IActionContextAccessor actionContextAccessor, IActionResultTypeMapper mapper,
                           ActionContext actionContext, IFilterMetadata[] filters, IList<IValueProviderFactory> valueProviderFactories);
@@ -1907,6 +2300,8 @@ internal abstract partial class ResourceInvoker                    // <---------
       return result.ExecuteResultAsync(_actionContext);
    }
 
+   protected abstract Task InvokeInnerFilterAsync();   // override by ControllerActionInvoker
+
    private Task Next(ref State next, ref Scope scope, ref object? state, ref bool isCompleted)
    {
       switch (next)
@@ -1972,18 +2367,17 @@ internal abstract partial class ResourceInvoker                    // <---------
             var authorizationContext = _authorizationContext;
 
             filter.OnAuthorization(authorizationContext);
-            if (authorizationContext.Result != null)
+            if (authorizationContext.Result != null)   // that's how you short-circuit by setting Result to IActionResult
             {
                goto case State.AuthorizationShortCircuit;
             }
 
-            goto case State.AuthorizationNext;
+            goto case State.AuthorizationNext;    // go up again, look like _index from FilterCursor persists, so it doesn't call sth like InvokeNextXXXilter like others
          
          case State.AuthorizationShortCircuit:
-            // this is a short-circuit - execute relevant result filters + result and complete this invocation.
             isCompleted = true;
             _result = _authorizationContext.Result;
-            return InvokeAlwaysRunResultFilters();
+            return InvokeAlwaysRunResultFilters();   // invoke IAlwaysRunResultFilter
          
          case State.AuthorizationEnd:
             goto case State.ResourceBegin;
@@ -2162,7 +2556,7 @@ internal abstract partial class ResourceInvoker                    // <---------
             goto case State.ExceptionEnd;
 
          case State.ExceptionSyncBegin:
-            var task = InvokeNextExceptionFilterAsync();
+            var task = InvokeNextExceptionFilterAsync();  // InvokeNextExceptionFilterAsync method has a try catch block to catch Exception and assign it to _exceptionContext
             if (!task.IsCompletedSuccessfully)
             {
                next = State.ExceptionSyncEnd;
@@ -2213,7 +2607,7 @@ internal abstract partial class ResourceInvoker                    // <---------
          case State.ExceptionEnd:
             var exceptionContext = _exceptionContext;
 
-            if (scope == Scope.Exception)
+            if (scope == Scope.Exception)   // emmm, must be for InvokeNextExceptionFilterAsync
             {
                isCompleted = true;
                return Task.CompletedTask;
@@ -2239,7 +2633,8 @@ internal abstract partial class ResourceInvoker                    // <---------
             goto case State.ResourceInsideEnd;
          
          case State.ActionBegin:
-            var task = InvokeInnerFilterAsync();
+            // calling ControllerActionInvoker's override InvokeInnerFilterAsync()
+            var task = InvokeInnerFilterAsync();  // <------------------------------------a1.a
             if (!task.IsCompletedSuccessfully)
             {
                next = State.ActionEnd;
@@ -2294,6 +2689,52 @@ internal abstract partial class ResourceInvoker                    // <---------
 
          default:
             throw new InvalidOperationException();
+      }
+   }
+
+   private Task InvokeNextExceptionFilterAsync()
+   {
+      try
+      {
+         var next = State.ExceptionNext;
+         var state = (object?)null;
+         var scope = Scope.Exception;
+         var isCompleted = false;
+
+         while (!isCompleted)
+         {
+            var lastTask = Next(ref next, ref scope, ref state, ref isCompleted);
+            if (!lastTask.IsCompletedSuccessfully)
+            {
+               return Awaited(this, lastTask, next, scope, state, isCompleted);
+            }
+         }
+
+         return Task.CompletedTask;
+      }
+      catch (Exception ex)
+      {
+         return Task.FromException(ex);
+      }
+
+      static async Task Awaited(ResourceInvoker invoker, Task lastTask, State next, Scope scope, object? state, bool isCompleted)
+      {
+         try
+         {
+            await lastTask;
+
+            while (!isCompleted)
+            {
+               await invoker.Next(ref next, ref scope, ref state, ref isCompleted);
+            }
+         }
+         catch (Exception exception)
+         {
+            invoker._exceptionContext = new ExceptionContextSealed(invoker._actionContext, invoker._filters)
+            {
+               ExceptionDispatchInfo = ExceptionDispatchInfo.Capture(exception),
+            };
+         }
       }
    }
 
@@ -2420,7 +2861,7 @@ internal partial class ControllerActionInvoker : ResourceInvoker, IActionInvoker
       return default;
    }
 
-   private Task Next(ref State next, ref Scope scope, ref object? state, ref bool isCompleted)
+   private Task Next(ref State next, ref Scope scope, ref object? state, ref bool isCompleted)    // <---------------------a2.b_
    {
       switch (next)
       {
@@ -2428,11 +2869,12 @@ internal partial class ControllerActionInvoker : ResourceInvoker, IActionInvoker
             var controllerContext = _controllerContext;
             _cursor.Reset();
 
-            _instance = _cacheEntry.ControllerFactory(controllerContext);
+            _instance = _cacheEntry.ControllerFactory(controllerContext);   // <-------------------------------c1<, a3, create an instance of Controller
 
             _arguments = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
 
-            var task = BindArgumentsAsync();
+            var task = BindArgumentsAsync();   // <--------------------------a4, a5.b
+
             if (task.Status != TaskStatus.RanToCompletion)
             {
                next = State.ActionNext;
@@ -2533,7 +2975,7 @@ internal partial class ControllerActionInvoker : ResourceInvoker, IActionInvoker
             goto case State.ActionEnd;
          
          case State.ActionInside:
-            var task = InvokeActionMethodAsync();
+            var task = InvokeActionMethodAsync();   // <-------------------importantdfdfd
             if (task.Status != TaskStatus.RanToCompletion)
             {
                next = State.ActionEnd;
@@ -2620,7 +3062,7 @@ internal partial class ControllerActionInvoker : ResourceInvoker, IActionInvoker
       return Task.CompletedTask;
    }
 
-   protected override Task InvokeInnerFilterAsync()
+   protected override Task InvokeInnerFilterAsync()  // override parent ResourceInvoker's abstract InvokeInnerFilterAsync   <------------------a1.b_
    {
       try 
       {
@@ -2631,7 +3073,7 @@ internal partial class ControllerActionInvoker : ResourceInvoker, IActionInvoker
 
          while (!isCompleted)
          {
-            var lastTask = Next(ref next, ref scope, ref state, ref isCompleted);
+            var lastTask = Next(ref next, ref scope, ref state, ref isCompleted);   // <---------------------a2.a
             if (!lastTask.IsCompletedSuccessfully)
             {
                return Awaited(this, lastTask, next, scope, state, isCompleted);
@@ -2680,7 +3122,7 @@ internal partial class ControllerActionInvoker : ResourceInvoker, IActionInvoker
          return Task.CompletedTask;
       }
 
-      return _cacheEntry.ControllerBinderDelegate(_controllerContext, _instance!, _arguments!);
+      return _cacheEntry.ControllerBinderDelegate(_controllerContext, _instance!, _arguments!);   // <---------------------a5.a, starting b1
    }
 
    private static object?[]? PrepareArguments(IDictionary<string, object?>? actionParameters, ObjectMethodExecutor actionMethodExecutor)
@@ -2729,11 +3171,133 @@ private enum State
 }
 */
 //---------------------------------------------Ʌ
+```
 
-//----------------------------------------------------V
-internal static class ControllerBinderDelegateProvider
+```C#
+//------------------------------------------V
+internal abstract class ActionMethodExecutor
 {
-   public static ControllerBinderDelegate? CreateBinderDelegate(
+   private static readonly ActionMethodExecutor[] Executors = new ActionMethodExecutor[]
+   {
+      // executors for sync methods
+      new VoidResultExecutor(),
+      new SyncActionResultExecutor(),
+      new SyncObjectResultExecutor(),
+ 
+      // executors for async methods
+      new TaskResultExecutor(),
+      new AwaitableResultExecutor(),
+      new TaskOfIActionResultExecutor(),
+      new TaskOfActionResultExecutor(),
+      new AwaitableObjectResultExecutor(),
+   }
+
+   public static EmptyResult EmptyResultInstance { get; } = new();
+
+   public abstract ValueTask<IActionResult> Execute(
+      ActionContext actionContext,
+      IActionResultTypeMapper mapper,
+      ObjectMethodExecutor executor,
+      object controller,
+      object?[]? arguments);
+
+   protected abstract bool CanExecute(ObjectMethodExecutor executor);
+
+   public abstract ValueTask<object?> Execute(ControllerEndpointFilterInvocationContext invocationContext);
+
+   public static ActionMethodExecutor GetExecutor(ObjectMethodExecutor executor)
+   {
+      for (var i = 0; i < Executors.Length; i++)
+      {
+         if (Executors[i].CanExecute(executor))
+         {
+            return Executors[i];
+         }
+      }
+ 
+      Debug.Fail("Should not get here");
+      throw new Exception();
+   }
+
+   public static ActionMethodExecutor GetFilterExecutor(ControllerActionDescriptor actionDescriptor) => new FilterActionMethodExecutor(actionDescriptor);
+
+   //-----------------VV
+   private sealed class FilterActionMethodExecutor : ActionMethodExecutor
+   {
+      private readonly ControllerActionDescriptor _controllerActionDescriptor;
+
+      public FilterActionMethodExecutor(ControllerActionDescriptor controllerActionDescriptor)
+      {
+         _controllerActionDescriptor = controllerActionDescriptor;
+      }
+
+      public override async ValueTask<IActionResult> Execute(
+         ActionContext actionContext,
+         IActionResultTypeMapper mapper,
+         ObjectMethodExecutor executor,
+         object controller,
+         object?[]? arguments)
+      {
+         var context = new ControllerEndpointFilterInvocationContext(_controllerActionDescriptor, actionContext, executor, mapper, controller, arguments);
+         var result = await _controllerActionDescriptor.FilterDelegate!(context);
+         return ConvertToActionResult(mapper, result, executor.IsMethodAsync ? executor.AsyncResultType! : executor.MethodReturnType);
+      }
+
+      public override ValueTask<object?> Execute(ControllerEndpointFilterInvocationContext invocationContext)
+      {
+         // this is never called
+         throw new NotSupportedException();
+      }
+ 
+      protected override bool CanExecute(ObjectMethodExecutor executor)
+      {
+         // this is never called
+         throw new NotSupportedException();
+      }
+   }
+   //-----------------ɅɅ
+   
+   //-----------------VV
+   private sealed class SyncActionResultExecutor : ActionMethodExecutor
+   {
+      public override ValueTask<IActionResult> Execute(
+         ActionContext actionContext,
+         IActionResultTypeMapper mapper,
+         ObjectMethodExecutor executor,
+         object controller,
+         object?[]? arguments)
+      {
+         var actionResult = (IActionResult)executor.Execute(controller, arguments)!;
+         EnsureActionResultNotNull(executor, actionResult);
+ 
+         return new(actionResult);
+      }
+
+      public override ValueTask<object?> Execute(ControllerEndpointFilterInvocationContext invocationContext)
+      {
+         var executor = invocationContext.Executor;
+         var controller = invocationContext.Controller;
+         var arguments = (object[])invocationContext.Arguments;
+ 
+         var actionResult = (IActionResult)executor.Execute(controller, arguments)!;
+         EnsureActionResultNotNull(executor, actionResult);
+ 
+         return new(actionResult);
+      }
+
+      protected override bool CanExecute(ObjectMethodExecutor executor) => !executor.IsMethodAsync && typeof(IActionResult).IsAssignableFrom(executor.MethodReturnType);
+   }
+   // ...
+   //-----------------ɅɅ
+}
+//------------------------------------------Ʌ
+```
+
+```C#
+//----------------------------------------------------V
+internal static class ControllerBinderDelegateProvider       
+{
+   public static ControllerBinderDelegate? CreateBinderDelegate(   // <---------------------------------b1.b
       ParameterBinder parameterBinder,
       IModelBinderFactory modelBinderFactory,
       IModelMetadataProvider modelMetadataProvider,
@@ -3527,6 +4091,159 @@ public partial class BodyModelBinder : IModelBinder
       var policy = (formatter as IInputFormatterExceptionPolicy)?.ExceptionPolicy ?? InputFormatterExceptionPolicy.MalformedInputExceptions;
  
       return policy == InputFormatterExceptionPolicy.AllExceptions;
+   }
+}
+//----------------------------------Ʌ
+
+//----------------------------------V
+public partial class ParameterBinder
+{
+   private readonly IModelMetadataProvider _modelMetadataProvider;
+   private readonly IModelBinderFactory _modelBinderFactory;
+   private readonly IObjectModelValidator _objectModelValidator;
+
+   public ParameterBinder(
+      IModelMetadataProvider modelMetadataProvider,
+      IModelBinderFactory modelBinderFactory,
+      IObjectModelValidator validator,
+      IOptions<MvcOptions> mvcOptions,
+      ILoggerFactory loggerFactory)
+   {
+      _modelMetadataProvider = modelMetadataProvider;
+      _modelBinderFactory = modelBinderFactory;
+      _objectModelValidator = validator;
+      Logger = loggerFactory.CreateLogger(GetType());
+   }
+
+   public virtual Task<ModelBindingResult> BindModelAsync(
+      ActionContext actionContext,
+      IModelBinder modelBinder,
+      IValueProvider valueProvider,
+      ParameterDescriptor parameter,
+      ModelMetadata metadata,
+      object? value)
+   {
+      BindModelAsync(actionContext, modelBinder, valueProvider, parameter, metadata, value, container: null).AsTask();
+   }
+
+   public virtual async ValueTask<ModelBindingResult> BindModelAsync(
+      ActionContext actionContext,
+      IModelBinder modelBinder,
+      IValueProvider valueProvider,
+      ParameterDescriptor parameter,
+      ModelMetadata metadata,
+      object? value,
+      object? container)
+   {
+      if (parameter.BindingInfo?.RequestPredicate?.Invoke(actionContext) == false)
+      {
+         Log.ParameterBinderRequestPredicateShortCircuit(Logger, parameter, metadata);
+         return ModelBindingResult.Failed();
+      }
+
+      var modelBindingContext = DefaultModelBindingContext.CreateBindingContext(actionContext, valueProvider, metadata, parameter.BindingInfo, parameter.Name);
+      modelBindingContext.Model = value;
+
+      var parameterModelName = parameter.BindingInfo?.BinderModelName ?? metadata.BinderModelName;
+      if (parameterModelName != null)
+      {
+         // the name was set explicitly, always use that as the prefix.
+         modelBindingContext.ModelName = parameterModelName;
+      }
+      else if (modelBindingContext.ValueProvider.ContainsPrefix(parameter.Name))
+      {
+         // we have a match for the parameter name, use that as that prefix.
+         modelBindingContext.ModelName = parameter.Name;
+      }
+      else
+      {
+         // no match, fallback to empty string as the prefix.
+         modelBindingContext.ModelName = string.Empty;
+      }
+
+      await modelBinder.BindModelAsync(modelBindingContext);
+
+      var modelBindingResult = modelBindingContext.Result;
+
+      if (_objectModelValidator is ObjectModelValidator baseObjectValidator)
+      {
+         EnforceBindRequiredAndValidate(baseObjectValidator, actionContext, parameter, metadata, modelBindingContext, modelBindingResult, container);
+      }
+      else
+      {
+         // for legacy implementations (which directly implemented IObjectModelValidator), fall back to the
+         // back-compatibility logic. In this scenario, top-level validation attributes will be ignored like they were historically.
+         if (modelBindingResult.IsModelSet)
+         {
+            _objectModelValidator.Validate(actionContext, modelBindingContext.ValidationState, modelBindingContext.ModelName, modelBindingResult.Model);
+         }
+      }
+
+      return modelBindingResult;
+   }
+
+   private void EnforceBindRequiredAndValidate(
+      ObjectModelValidator baseObjectValidator,
+      ActionContext actionContext,
+      ParameterDescriptor parameter,
+      ModelMetadata metadata,
+      ModelBindingContext modelBindingContext,
+      ModelBindingResult modelBindingResult,
+      object? container)
+   {
+      RecalculateModelMetadata(parameter, modelBindingResult, ref metadata);
+ 
+      if (!modelBindingResult.IsModelSet && metadata.IsBindingRequired)
+      {
+         // enforce BindingBehavior.Required (e.g., [BindRequired])
+         var modelName = modelBindingContext.FieldName;
+         var message = metadata.ModelBindingMessageProvider.MissingBindRequiredValueAccessor(modelName);
+         actionContext.ModelState.TryAddModelError(modelName, message);
+      }
+      else if (modelBindingResult.IsModelSet)
+      {
+         // enforce any other validation rules
+         baseObjectValidator.Validate(actionContext, modelBindingContext.ValidationState, modelBindingContext.ModelName, modelBindingResult.Model, metadata, container);
+      }
+      else if (metadata.IsRequired)
+      {
+         var modelName = modelBindingContext.ModelName;
+ 
+         if (string.IsNullOrEmpty(modelBindingContext.ModelName) && parameter.BindingInfo?.BinderModelName == null)
+         {
+            // if we get here then this is a fallback case. The model name wasn't explicitly set and we ended up with an empty prefix.
+            modelName = modelBindingContext.FieldName;
+         }
+ 
+         // run validation, we expect this to validate [Required].
+         baseObjectValidator.Validate(actionContext, modelBindingContext.ValidationState, modelName, modelBindingResult.Model, metadata, container);
+      }
+   }
+
+   private void RecalculateModelMetadata(ParameterDescriptor parameter, ModelBindingResult modelBindingResult, ref ModelMetadata metadata)
+   {
+      if (!modelBindingResult.IsModelSet || modelBindingResult.Model == null || _modelMetadataProvider is not ModelMetadataProvider modelMetadataProvider)
+      {
+         return;
+      }
+ 
+      var modelType = modelBindingResult.Model.GetType();
+      if (parameter is IParameterInfoParameterDescriptor parameterInfoParameter)
+      {
+         var parameterInfo = parameterInfoParameter.ParameterInfo;
+         if (modelType != parameterInfo.ParameterType)
+         {
+            metadata = modelMetadataProvider.GetMetadataForParameter(parameterInfo, modelType);
+         }
+      }
+      else if (parameter is IPropertyInfoParameterDescriptor propertyInfoParameter)
+      {
+         var propertyInfo = propertyInfoParameter.PropertyInfo;
+         if (modelType != propertyInfo.PropertyType)
+         {
+            metadata = modelMetadataProvider.GetMetadataForProperty(propertyInfo, modelType);
+         }
+      }
    }
 }
 //----------------------------------Ʌ

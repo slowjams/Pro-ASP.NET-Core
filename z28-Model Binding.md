@@ -95,14 +95,24 @@ public static class ServiceCollectionExtensions
 public interface IValueProvider
 {
    bool TryGetValues(string name, out string[] values);
+
    bool ContainsPrefix(string prefix);
 }
 
 public class CompositeValueProvider : IValueProvider
 {
    private readonly IEnumerable<IValueProvider> _providers;
-   public CompositeValueProvider(IEnumerable<IValueProvider> providers) => _providers = providers;
-   public bool ContainsPrefix(string prefix) => _providers.Any(it => it.ContainsPrefix(prefix));
+
+   public CompositeValueProvider(IEnumerable<IValueProvider> providers) 
+   {
+      _providers = providers;
+   }
+
+   public bool ContainsPrefix(string prefix)
+   {
+      _providers.Any(it => it.ContainsPrefix(prefix));
+   }
+
    public bool TryGetValues(string name, out string[] value)
    {
       foreach (var provider in _providers)
@@ -255,7 +265,7 @@ public class ModelBinderFactory : IModelBinderFactory
       foreach (var provider in _providers)
       {
          var binder = provider.GetBinder(metadata);
-         if (binder != null)
+         if (binder != null)   // IModelBinderProvider will do a precheck on ModelMetadata to return the binder, if doesn't match, return null
          {
             return binder;
          }
@@ -327,16 +337,23 @@ public class ControllerActionInvoker : IActionInvoker
       {
          var parameter = parameters[index];
          var metadata = ModelMetadata.CreateByParameter(parameter);
+
          var requestServices = ActionContext.HttpContext.RequestServices;
+
          var valueProviderFactories = requestServices.GetServices<IValueProviderFactory>();
          var valueProvider = new CompositeValueProvider(valueProviderFactories.Select(it => it.CreateValueProvider(ActionContext))); 
+         
          var modelBinderFactory = requestServices.GetRequiredService<IModelBinderFactory>();
-         var context = valueProvider.ContainsPrefix(parameter.Name)
-                ? new ModelBindingContext(ActionContext, parameter.Name, metadata, valueProvider)
-                : new ModelBindingContext(ActionContext, "", metadata, valueProvider);
+         
+         var bindingContext = valueProvider.ContainsPrefix(parameter.Name)
+            ? new ModelBindingContext(ActionContext, parameter.Name, metadata, valueProvider)
+            : new ModelBindingContext(ActionContext, "", metadata, valueProvider);
+        
          var binder = modelBinderFactory.CreateBinder(metadata);
-         await binder.BindAsync(context);
-         arguments[index] = context.Model;
+         
+         await binder.BindAsync(bindingContext);
+         
+         arguments[index] = bindingContext.Model;
       } 
       return arguments;
    }

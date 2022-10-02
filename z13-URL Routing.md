@@ -144,7 +144,7 @@ public static class EndpointRoutingApplicationBuilderExtensions
    public static IApplicationBuilder UseEndpoints(this IApplicationBuilder builder, Action<IEndpointRouteBuilder> configure) {  // B
        VerifyRoutingServicesAreRegistered(builder); // <---------b1
        VerifyEndpointRoutingMiddlewareIsRegistered(builder, out var endpointRouteBuilder);   // <---------b2
-       configure(endpointRouteBuilder);   // <-------------b3, this applies the changes you made with: e.g endpoints.MapGet("{first}/{second}/{third}", ...) 
+       configure(endpointRouteBuilder);   // <-------------b3, this applies the changes you write : endpoints.MapControllers() or endpoints.MapGet("{first}/{second}/{third}", ...) 
 
        var routeOptions = builder.ApplicationServices.GetRequiredService<IOptions<RouteOptions>>();
        foreach (var dataSource in endpointRouteBuilder.DataSources) {   
@@ -314,7 +314,7 @@ public interface IEndpointFeature {
 
 public static class EndpointHttpContextExtensions {
 
-   public static Endpoint? GetEndpoint(this HttpContext context) {
+   public static Endpoint GetEndpoint(this HttpContext context) {
 
       return context.Features.Get<IEndpointFeature>()?.Endpoint;
    }
@@ -1893,7 +1893,7 @@ public class ControllerActionInvoker : IActionInvoker
       var actionDescriptor = (ControllerActionDescriptor)ActionContext.ActionDescriptor;
       var controllerType = actionDescriptor.ControllerType;
       var requestServies = ActionContext.HttpContext.RequestServices;
-      var controllerInstance = ActivatorUtilities.CreateInstance(requestServies, controllerType);
+      var controllerInstance = ActivatorUtilities.CreateInstance(requestServies, controllerType);  // create an instance of Controller
       
       if (controllerInstance is Controller controller)
       {

@@ -450,7 +450,7 @@ public interface IFilterFactory : IFilterMetadata
 }
 
 
-//A filter that creates another filter of ImplementationType, retrieving missing constructor arguments from dependency injection
+// a filter that creates another filter of ImplementationType, retrieving missing constructor arguments from dependency injection
 public class TypeFilterAttribute : Attribute, IFilterFactory, IOrderedFilter
 {
    private ObjectFactory _factory;
