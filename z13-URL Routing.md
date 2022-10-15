@@ -791,8 +791,8 @@ internal sealed partial class EndpointMiddleware   // this middleware is quite s
 
          Log.ExecutingEndpoint(_logger, endpoint);
 
-         try {                      // execute endpoint's delegate        this is when Controller and ActionContext instance is created, and ActionContext is set to be 
-            var requestTask = endpoint.RequestDelegate(httpContext);     // <----------------------------------------------------------- an property of this Controller
+         try {                      // execute endpoint's delegate        this is when Controller and ActionContext instance is created 
+            var requestTask = endpoint.RequestDelegate(httpContext);     // <-----------------------------check ActionEndpointFactory in "Demystifying ControllerActionInvoker"
             if (!requestTask.IsCompletedSuccessfully) {
                return AwaitRequestTask(endpoint, requestTask, _logger);  // if endpoint found and executed successfully, return immediately, 
                                                                          // therefore short circuit the rest of middlewares
@@ -1471,7 +1471,7 @@ public static class EndpointRouteBuilderExtensions
    {
       var endpointDatasource = endpointBuilder.ServiceProvider.GetRequiredService<ControllerActionEndpointDataSource>();   // <-------------------------------------- 1.
       endpointBuilder.DataSources.Add(endpointDatasource);
-      return endpointDatasource.AddRoute(name, pattern, defaults, constraints, dataTokens);
+      return endpointDatasource.AddRoute(name, pattern, defaults, constraints, dataTokens);     
    }
 
    // you can see that the purpose of these two extension methods, same as `MapControllers()`, `MapDefaultControllerRoute()` is just to use DI to resolve the 

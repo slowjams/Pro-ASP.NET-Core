@@ -1366,7 +1366,7 @@ internal sealed class ActionEndpointFactory
 
       return (context) =>
       {
-         var endpoint = context.GetEndpoint()!;
+         var endpoint = context.GetEndpoint()!;     // <------------------------------EndpointRoutingMiddleware sets the Endpoint
          var dataTokens = endpoint.Metadata.GetMetadata<IDataTokensMetadata>();
  
          var routeData = new RouteData();
@@ -3452,62 +3452,286 @@ internal static class ControllerBinderDelegateProvider
 //----------------------------------------------------Ʌ
 
 //---------------------------------------V
-public abstract class ModelBindingContext
+public readonly struct ModelBindingResult : IEquatable<ModelBindingResult>
 {
-   public abstract ActionContext ActionContext
-
-   public abstract string? BinderModelName { get; set; }
-
-   public abstract BindingSource? BindingSource { get; set; }
-
-   public abstract string FieldName { get; set; }
-
-   public virtual HttpContext HttpContext => ActionContext?.HttpContext!;
-
-   public abstract bool IsTopLevelObject { get; set; }
-
-   public abstract object? Model { get; set; }
-
-   public abstract ModelMetadata ModelMetadata { get; set; }
-
-   public abstract string ModelName { get; set; }
-
-   public string OriginalModelName { get; protected set; } = default!;
-
-   public abstract ModelStateDictionary ModelState { get; set; }
-
-   public virtual Type ModelType => ModelMetadata.ModelType;
-
-   public abstract Func<ModelMetadata, bool>? PropertyFilter { get; set; }
-
-   public abstract ValidationStateDictionary ValidationState { get; set; }
-
-   public abstract IValueProvider ValueProvider { get; set; }
-
-   public abstract ModelBindingResult Result { get; set; }
-
-   public abstract NestedScope EnterNestedScope(ModelMetadata modelMetadata, string fieldName, string modelName, object? model);
-
-   public abstract NestedScope EnterNestedScope();
-
-   protected abstract void ExitNestedScope();
-
-   public readonly struct NestedScope : IDisposable
+   public static ModelBindingResult Failed()
    {
-      private readonly ModelBindingContext _context;
+      return new ModelBindingResult(model: null, isModelSet: false);
+   }
 
-      public NestedScope(ModelBindingContext context)
-      {
-         _context = context;
-      }
+   public static ModelBindingResult Success(object? model)
+   {
+      return new ModelBindingResult(model, isModelSet: true);
+   }
 
-      public void Dispose()
-      {
-         _context.ExitNestedScope();
-      }
+   private ModelBindingResult(object? model, bool isModelSet)
+   {
+      Model = model;
+      IsModelSet = isModelSet;
+   }
+
+   public object? Model { get; }
+
+   public bool IsModelSet { get; }
+
+   public bool Equals(ModelBindingResult other)
+   {
+      return IsModelSet == other.IsModelSet && object.Equals(Model, other.Model);
    }
 }
 //---------------------------------------Ʌ
+
+//---------------------------------V
+public abstract class ModelMetadata : IEquatable<ModelMetadata?>, IModelMetadataProvider
+{
+   public static readonly int DefaultOrder = 10000;
+
+   private static readonly ParameterBindingMethodCache ParameterBindingMethodCache = new(throwOnInvalidMethod: false);
+
+   private int? _hashCode;
+   private IReadOnlyList<ModelMetadata>? _boundProperties;
+   private IReadOnlyDictionary<ModelMetadata, ModelMetadata>? _parameterMapping;
+   private IReadOnlyDictionary<ModelMetadata, ModelMetadata>? _boundConstructorPropertyMapping;
+   private Exception? _recordTypeValidatorsOnPropertiesError;
+   private bool _recordTypeConstructorDetailsCalculated;
+
+   protected ModelMetadata(ModelMetadataIdentity identity)
+   {
+      Identity = identity;
+      InitializeTypeInformation();
+   }
+
+   public Type? ContainerType => Identity.ContainerType;
+
+   public virtual ModelMetadata? ContainerMetadata
+   {
+      get {
+         throw new NotImplementedException();
+      }
+   }
+
+   public ModelMetadataKind MetadataKind => Identity.MetadataKind;
+
+   public Type ModelType => Identity.ModelType;
+
+   public string? Name => Identity.Name;
+
+   public string? ParameterName => MetadataKind == ModelMetadataKind.Parameter ? Identity.Name : null;
+
+   public string? PropertyName => MetadataKind == ModelMetadataKind.Property ? Identity.Name : null;
+
+   protected internal ModelMetadataIdentity Identity { get; }
+
+   public abstract IReadOnlyDictionary<object, object> AdditionalValues { get; }
+
+   public abstract ModelPropertyCollection Properties { get; }
+
+   internal IReadOnlyList<ModelMetadata> BoundProperties
+   {
+      get {
+         if (BoundConstructor is null)
+         {
+            return Properties;
+         }
+
+         if (_boundProperties is null)
+         {
+            var boundParameters = BoundConstructor.BoundConstructorParameters!;
+            var boundProperties = new List<ModelMetadata>();
+ 
+            foreach (var metadata in Properties)
+            {
+               if (!boundParameters.Any(p => string.Equals(p.ParameterName, metadata.PropertyName, StringComparison.Ordinal) && p.ModelType == metadata.ModelType))
+               {
+                  boundProperties.Add(metadata);
+               }
+            }
+ 
+            _boundProperties = boundProperties;
+         }
+ 
+         return _boundProperties;
+      }
+   }
+
+   internal IReadOnlyDictionary<ModelMetadata, ModelMetadata> BoundConstructorParameterMapping
+   {
+      get {
+         Debug.Assert(BoundConstructor != null, "This API can be only called for types with bound constructors.");
+         CalculateRecordTypeConstructorDetails();
+ 
+         return _parameterMapping;
+      }
+   }
+
+   internal IReadOnlyDictionary<ModelMetadata, ModelMetadata> BoundConstructorPropertyMapping
+   {
+      get {
+         Debug.Assert(BoundConstructor != null, "This API can be only called for types with bound constructors.");
+         CalculateRecordTypeConstructorDetails();
+ 
+         return _boundConstructorPropertyMapping;
+      }
+   }
+
+   public virtual ModelMetadata? BoundConstructor { get; }
+
+   public virtual IReadOnlyList<ModelMetadata>? BoundConstructorParameters { get; }
+
+   public abstract string? BinderModelName { get; }
+
+   public abstract Type? BinderType { get; }
+
+   public abstract BindingSource? BindingSource { get; }
+
+   public abstract bool ConvertEmptyStringToNull { get; }
+
+   public abstract string? DataTypeName { get; }
+
+   public abstract string? DisplayName { get; }
+
+   public abstract bool IsRequired { get; }
+   // ...
+}
+//---------------------------------Ʌ
+
+public interface IModelMetadataProvider
+{
+   ModelMetadata GetMetadataForType(Type modelType);
+
+   IEnumerable<ModelMetadata> GetMetadataForProperties(Type modelType);
+}
+
+public abstract class ModelMetadataProvider : IModelMetadataProvider
+{
+   public abstract IEnumerable<ModelMetadata> GetMetadataForProperties(Type modelType);
+   public abstract ModelMetadata GetMetadataForType(Type modelType);
+   public abstract ModelMetadata GetMetadataForParameter(ParameterInfo parameter);
+   public virtual ModelMetadata GetMetadataForParameter(ParameterInfo parameter, Type modelType) => throw new NotSupportedException();
+   public virtual ModelMetadata GetMetadataForProperty(PropertyInfo propertyInfo, Type modelType) => throw new NotSupportedException();
+   public virtual ModelMetadata GetMetadataForConstructor(ConstructorInfo constructor, Type modelType) => throw new NotSupportedException();
+}
+
+//---------------------------------------V
+public class DefaultModelMetadataProvider : ModelMetadataProvider
+{
+   private readonly ConcurrentDictionary<ModelMetadataIdentity, ModelMetadataCacheEntry> _modelMetadataCache = new();
+   private readonly Func<ModelMetadataIdentity, ModelMetadataCacheEntry> _cacheEntryFactory;
+   private readonly ModelMetadataCacheEntry _metadataCacheEntryForObjectType;
+
+   public DefaultModelMetadataProvider(ICompositeMetadataDetailsProvider detailsProvider) : this(detailsProvider, new DefaultModelBindingMessageProvider()) { }
+
+   public DefaultModelMetadataProvider(ICompositeMetadataDetailsProvider detailsProvider, IOptions<MvcOptions> optionsAccessor) 
+      : this(detailsProvider, GetMessageProvider(optionsAccessor)) { }
+
+   private DefaultModelMetadataProvider(ICompositeMetadataDetailsProvider detailsProvider, DefaultModelBindingMessageProvider modelBindingMessageProvider)
+   {
+      DetailsProvider = detailsProvider;
+      ModelBindingMessageProvider = modelBindingMessageProvider;
+ 
+      _cacheEntryFactory = CreateCacheEntry;
+      _metadataCacheEntryForObjectType = GetMetadataCacheEntryForObjectType();
+   }
+
+   protected ICompositeMetadataDetailsProvider DetailsProvider { get; }
+
+   protected DefaultModelBindingMessageProvider ModelBindingMessageProvider { get; }
+
+   internal void ClearCache() => _modelMetadataCache.Clear();
+
+   public override IEnumerable<ModelMetadata> GetMetadataForProperties(Type modelType)
+   {
+      var cacheEntry = GetCacheEntry(modelType);
+
+      if (cacheEntry.Details.Properties == null)
+      {
+         var key = ModelMetadataIdentity.ForType(modelType);
+         var propertyDetails = CreatePropertyDetails(key);
+ 
+         var properties = new ModelMetadata[propertyDetails.Length];
+         for (var i = 0; i < properties.Length; i++)
+         {
+            propertyDetails[i].ContainerMetadata = cacheEntry.Metadata;
+            properties[i] = CreateModelMetadata(propertyDetails[i]);
+         }
+ 
+         cacheEntry.Details.Properties = properties;
+      }
+
+      return cacheEntry.Details.Properties;
+   }
+
+   public override ModelMetadata GetMetadataForParameter(ParameterInfo parameter) => GetMetadataForParameter(parameter, parameter.ParameterType);
+
+   public override ModelMetadata GetMetadataForParameter(ParameterInfo parameter, Type modelType)
+   {
+      var cacheEntry = GetCacheEntry(parameter, modelType);
+      return cacheEntry.Metadata;
+   }
+
+   public override ModelMetadata GetMetadataForType(Type modelType)
+   {
+      var cacheEntry = GetCacheEntry(modelType);
+      return cacheEntry.Metadata;
+   }
+
+   public override ModelMetadata GetMetadataForProperty(PropertyInfo propertyInfo, Type modelType)
+   {
+      var cacheEntry = GetCacheEntry(propertyInfo, modelType);
+      return cacheEntry.Metadata;
+   }
+
+   public override ModelMetadata GetMetadataForConstructor(ConstructorInfo constructorInfo, Type modelType)
+   {
+      var cacheEntry = GetCacheEntry(constructorInfo, modelType);
+      return cacheEntry.Metadata;
+   }
+
+   private static DefaultModelBindingMessageProvider GetMessageProvider(IOptions<MvcOptions> optionsAccessor)
+   {
+      return optionsAccessor.Value.ModelBindingMessageProvider;
+   }
+
+   private ModelMetadataCacheEntry GetCacheEntry(Type modelType)
+   {
+      ModelMetadataCacheEntry cacheEntry;
+
+      if (modelType == typeof(object))
+      {
+         cacheEntry = _metadataCacheEntryForObjectType;
+      }
+      else
+      {
+         var key = ModelMetadataIdentity.ForType(modelType);
+ 
+         cacheEntry = _modelMetadataCache.GetOrAdd(key, _cacheEntryFactory);
+      }
+
+      return cacheEntry;
+   }
+
+   private ModelMetadataCacheEntry GetCacheEntry(ParameterInfo parameter, Type modelType)
+   {
+      return _modelMetadataCache.GetOrAdd(ModelMetadataIdentity.ForParameter(parameter, modelType), _cacheEntryFactory);
+   }
+
+   // ...
+
+   private readonly struct ModelMetadataCacheEntry
+   {
+      public ModelMetadataCacheEntry(ModelMetadata metadata, DefaultMetadataDetails details)
+      {
+         Metadata = metadata;
+         Details = details;
+      }
+ 
+      public ModelMetadata Metadata { get; }
+ 
+      public DefaultMetadataDetails Details { get; }
+   }
+}
+//---------------------------------------Ʌ
+
 
 public interface IModelBinderFactory
 {
@@ -3744,6 +3968,240 @@ public partial class ModelBinderFactory : IModelBinderFactory
 }
 //-------------------------------------Ʌ
 
+
+//-----------------------------------------------------------------------------------------------V
+public interface IValueProvider
+{
+   bool ContainsPrefix(string prefix);
+   ValueProviderResult GetValue(string key);
+}
+
+// >
+public readonly struct ValueProviderResult : IEquatable<ValueProviderResult>, IEnumerable<string>
+{
+   private static readonly CultureInfo _invariantCulture = CultureInfo.InvariantCulture;
+   public static ValueProviderResult None = new ValueProviderResult(Array.Empty<string>());
+
+   public ValueProviderResult(StringValues values) : this(values, _invariantCulture) { }
+
+   public CultureInfo Culture { get; }
+   public StringValues Values { get; }
+
+   public string? FirstValue 
+   {
+      get {
+         if (Values.Count == 0)
+            return null;
+            
+         return Values[0];
+      }
+   }
+
+   public int Length => Values.Count;
+
+   public IEnumerator<string> GetEnumerator() => ((IEnumerable<string>)Values).GetEnumerator();
+} 
+// <
+
+// >
+public class ValueProviderFactoryContext 
+{  
+   public ValueProviderFactoryContext(ActionContext context)
+   {
+      ActionContext = context;
+   }
+
+   public ActionContext ActionContext { get; }
+   
+   public IList<IValueProvider> ValueProviders { get; } = new List<IValueProvider>();
+}  
+// <
+
+public interface IValueProviderFactory
+{
+   Task CreateValueProviderAsync(ValueProviderFactoryContext context);
+}
+//-----------------------------------------------------------------------------------------------Ʌ
+
+public class QueryStringValueProviderFactory : IValueProviderFactory
+{
+   public Task CreateValueProviderAsync(ValueProviderFactoryContext context)
+   {
+      var query = context.ActionContext.HttpContext.Request.Query;
+      if (query != null && query.Count > 0)
+      {
+         var valueProvider = new QueryStringValueProvider(BindingSource.Query, query, CultureInfo.InvariantCulture);
+         context.ValueProviders.Add(valueProvider);
+      }
+
+      return Task.CompletedTask;
+   }
+}
+
+public class FormValueProviderFactory 
+{
+   public Task CreateValueProviderAsync(ValueProviderFactoryContext context)
+   {
+      var request = context.ActionContext.HttpContext.Request;
+      if (request.HasFormContentType)
+         return AddValueProviderAsync(context);   // allocating a Task only when the body is form data
+
+      return Task.CompletedTask;
+   }
+
+   private static async Task AddValueProviderAsync(ValueProviderFactoryContext context)
+   {
+      var request = context.ActionContext.HttpContext.Request;
+      IFormCollection form;
+
+      try {
+         form = await request.ReadFormAsync();
+      }
+      catch (InvalidDataException ex) {  
+         throw new ValueProviderException(Resources.FormatFailedToReadRequestForm(ex.Message), ex);
+      }
+      catch (IOException ex) {
+         throw new ValueProviderException(Resources.FormatFailedToReadRequestForm(ex.Message), ex);
+      }
+
+      var valueProvider = new FormValueProvider(BindingSource.Form, form, CultureInfo.CurrentCulture);
+ 
+      context.ValueProviders.Add(valueProvider);
+   }
+}
+
+//----------------------------------------------------------------------------V
+public abstract class BindingSourceValueProvider : IBindingSourceValueProvider
+{
+   public BindingSourceValueProvider(BindingSource bindingSource)
+   {
+      if (bindingSource.IsGreedy) {
+         var message = Resources.FormatBindingSource_CannotBeGreedy(bindingSource.DisplayName, nameof(BindingSourceValueProvider));
+         throw new ArgumentException(message, nameof(bindingSource));
+      }
+
+      if (bindingSource is CompositeBindingSource) {
+         var message = Resources.FormatBindingSource_CannotBeComposite(bindingSource.DisplayName, nameof(BindingSourceValueProvider));
+         throw new ArgumentException(message, nameof(bindingSource));
+      }
+
+      BindingSource = bindingSource;
+   }
+
+   protected BindingSource BindingSource { get; }
+   public abstract bool ContainsPrefix(string prefix);
+   public abstract ValueProviderResult GetValue(string key);
+
+   public virtual IValueProvider? Filter(BindingSource bindingSource)
+   {
+      if (bindingSource.CanAcceptDataFrom(BindingSource))
+      {
+         return this;
+      }     
+      else
+      {
+         return null;
+      }
+   }
+}
+//----------------------------------------------------------------------------Ʌ
+
+//------------------------------------------------------------------------------------------V
+public class QueryStringValueProvider : BindingSourceValueProvider, IEnumerableValueProvider
+{
+   private readonly IQueryCollection _values;
+   private PrefixContainer? _prefixContainer;
+
+   public QueryStringValueProvider(BindingSource bindingSource, IQueryCollection values, CultureInfo? culture) : base(bindingSource)
+   {
+      _values = values;
+      Culture = culture;
+   }
+
+   public CultureInfo? Culture { get; }
+
+   protected PrefixContainer PrefixContainer
+   {
+      get {
+         if (_prefixContainer == null)
+            _prefixContainer = new PrefixContainer(_values.Keys);
+ 
+         return _prefixContainer;
+      }
+   }
+
+   public override bool ContainsPrefix(string prefix) => PrefixContainer.ContainsPrefix(prefix);
+
+   public virtual IDictionary<string, string> GetKeysFromPrefix(string prefix) => PrefixContainer.GetKeysFromPrefix(prefix);
+
+   public override ValueProviderResult GetValue(string key)
+   {
+      if (key.Length == 0)
+         return ValueProviderResult.None;
+      
+      var values = _values[key];
+      if (values.Count == 0)
+         return ValueProviderResult.None;
+      else
+         return new ValueProviderResult(values, Culture);
+   }
+}
+//------------------------------------------------------------------------------------------Ʌ
+
+//-----------------------------------------------------------------------------------V
+public class FormValueProvider : BindingSourceValueProvider, IEnumerableValueProvider
+{
+   private readonly IFormCollection _values;
+   private readonly HashSet<string?>? _invariantValueKeys;
+   private PrefixContainer? _prefixContainer;
+
+   public FormValueProvider(BindingSource bindingSource, IFormCollection values, CultureInfo? culture) : base(bindingSource)
+   {
+      _values = values;
+ 
+      if (_values.TryGetValue(FormValueHelper.CultureInvariantFieldName, out var invariantKeys) && invariantKeys.Count > 0)
+      {
+         _invariantValueKeys = new(invariantKeys, StringComparer.OrdinalIgnoreCase);
+      }
+ 
+      Culture = culture;
+   }
+
+   public CultureInfo? Culture { get; }
+
+   protected PrefixContainer PrefixContainer {
+      get {
+         if (_prefixContainer == null)
+            _prefixContainer = new PrefixContainer(_values.Keys);
+         return _prefixContainer;
+        }
+   }
+
+   public override bool ContainsPrefix(string prefix) => PrefixContainer.ContainsPrefix(prefix);
+   
+   public virtual IDictionary<string, string> GetKeysFromPrefix(string prefix) => PrefixContainer.GetKeysFromPrefix(prefix);
+   
+   public override ValueProviderResult GetValue(string key)
+   {
+      if (key.Length == 0)
+         return ValueProviderResult.None;
+         
+      var values = _values[key];
+      if (values.Count == 0)
+      {
+         return ValueProviderResult.None;
+      }
+      else
+      {
+         var culture = _invariantValueKeys?.Contains(key) == true ? CultureInfo.InvariantCulture : Culture;
+         return new ValueProviderResult(values, culture);
+      }
+   }
+}
+//-----------------------------------------------------------------------------------Ʌ
+
+// public class RouteValueProvider : BindingSourceValueProvider { ... }
+
 //---------------------------------V
 public class CompositeValueProvider :  Collection<IValueProvider>, IEnumerableValueProvider, IBindingSourceValueProvider, IKeyRewriterValueProvider
 {
@@ -3929,6 +4387,353 @@ public class CompositeValueProvider :  Collection<IValueProvider>, IEnumerableVa
 }
 //---------------------------------Ʌ
 
+//------------------------V
+public class BindingSource : IEquatable<BindingSource?>
+{
+   public static readonly BindingSource Body = new BindingSource("Body", Resources.BindingSource_Body, isGreedy: true, isFromRequest: true);
+   public static readonly BindingSource Custom = new BindingSource("Custom", Resources.BindingSource_Custom, isGreedy: true, isFromRequest: true);
+   public static readonly BindingSource Form = new BindingSource("Form", Resources.BindingSource_Form, isGreedy: false, isFromRequest: true);
+   public static readonly BindingSource Header = new BindingSource("Header", Resources.BindingSource_Header, isGreedy: true, isFromRequest: true);
+   public static readonly BindingSource ModelBinding = new BindingSource("ModelBinding", Resources.BindingSource_ModelBinding, isGreedy: false, isFromRequest: true);
+   public static readonly BindingSource Path = new BindingSource("Path", Resources.BindingSource_Path, isGreedy: false, isFromRequest: true);     // url request url path
+   public static readonly BindingSource Query = new BindingSource("Query", Resources.BindingSource_Query, isGreedy: false, isFromRequest: true);  // query-string
+   public static readonly BindingSource Services = new BindingSource("Services", Resources.BindingSource_Services, isGreedy: true, isFromRequest: false);
+   public static readonly BindingSource Special = new BindingSource("Special", Resources.BindingSource_Special, isGreedy: true, isFromRequest: false);  // when not user input
+   public static readonly BindingSource FormFile = new BindingSource("FormFile", Resources.BindingSource_FormFile, isGreedy: true, isFromRequest: true);
+
+   public BindingSource(string id, string displayName, bool isGreedy, bool isFromRequest)
+   {
+      Id = id;
+      DisplayName = displayName;
+      IsGreedy = isGreedy;
+      IsFromRequest = isFromRequest;
+   }
+
+   public string DisplayName { get; }
+   public string Id { get; }
+   public bool IsGreedy { get; }
+   public bool IsFromRequest { get; }
+
+   public virtual bool CanAcceptDataFrom(BindingSource bindingSource)
+   {
+      if (bindingSource is CompositeBindingSource)
+         throw new ArgumentNullException(nameof(bindingSource));
+
+      if (bindingSource is CompositeBindingSource)
+      {
+         var message = Resources.FormatBindingSource_CannotBeComposite(bindingSource.DisplayName, nameof(CanAcceptDataFrom));
+         throw new ArgumentException(message, nameof(bindingSource));
+      }
+
+      if (this == bindingSource)
+      {
+         return true;
+      }
+
+      if (this == ModelBinding)
+      {
+         return bindingSource == Form || bindingSource == Path || bindingSource == Query;
+      }
+ 
+      return false;
+   }
+}
+//------------------------Ʌ
+
+//---------------------------------V
+public class CompositeBindingSource : BindingSource
+{
+   public static CompositeBindingSource Create(IEnumerable<BindingSource> bindingSources, string displayName)
+   {
+      foreach (var bindingSource in bindingSources)
+      {
+         if (bindingSource.IsGreedy) {
+            var message = Resources.FormatBindingSource_CannotBeGreedy(bindingSource.DisplayName, nameof(CompositeBindingSource));
+            throw new ArgumentException(message, nameof(bindingSources));
+         }
+
+         if (!bindingSource.IsFromRequest) {
+            var message = Resources.FormatBindingSource_MustBeFromRequest(bindingSource.DisplayName, nameof(CompositeBindingSource));
+            throw new ArgumentException(message, nameof(bindingSources));
+         }
+
+         if (bindingSource is CompositeBindingSource) {
+            var message = Resources.FormatBindingSource_CannotBeComposite(bindingSource.DisplayName, nameof(CompositeBindingSource));
+            throw new ArgumentException(message, nameof(bindingSources));
+         }
+      }
+
+      var id = string.Join("&", bindingSources.Select(s => s.Id).OrderBy(s => s, StringComparer.Ordinal));
+      return new CompositeBindingSource(id, displayName, bindingSources);
+   }
+
+   private CompositeBindingSource(string id, string displayName, IEnumerable<BindingSource> bindingSources) : base(id, displayName, isGreedy: false, isFromRequest: true)
+   {
+      BindingSources = bindingSources;
+   }
+
+   public IEnumerable<BindingSource> BindingSources { get; }
+
+   public override bool CanAcceptDataFrom(BindingSource bindingSource)
+   {
+      if (bindingSource is CompositeBindingSource)
+        throw new ArgumentException(message, nameof(bindingSource));
+
+      foreach (var source in BindingSources)
+      {
+         if (source.CanAcceptDataFrom(bindingSource))
+         {
+            return true;
+         }
+      }
+
+      return false;
+   }
+}
+//---------------------------------Ʌ
+
+//----------------------V
+public class BindingInfo
+{
+   private Type? _binderType;
+
+   public BindingInfo() { }
+
+   public BindingInfo(BindingInfo other)
+   {
+      BindingSource = other.BindingSource;
+      BinderModelName = other.BinderModelName;
+      BinderType = other.BinderType;
+      PropertyFilterProvider = other.PropertyFilterProvider;
+      RequestPredicate = other.RequestPredicate;
+      EmptyBodyBehavior = other.EmptyBodyBehavior;
+   }
+
+   public BindingSource? BindingSource { get; set; }
+
+   public string? BinderModelName { get; set; }
+
+   public Type? BinderType
+   {
+      get => _binderType;
+      set {
+         if (value != null && !typeof(IModelBinder).IsAssignableFrom(value))
+            throw new ArgumentException(Resources.FormatBinderType_MustBeIModelBinder(value.FullName, typeof(IModelBinder).FullName), nameof(value));
+         
+         _binderType = value;
+      }
+   }
+
+   public IPropertyFilterProvider? PropertyFilterProvider { get; set; }
+
+   public Func<ActionContext, bool>? RequestPredicate { get; set; }  // a predicate determines if the model should be bound based on state from the current request
+
+   public EmptyBodyBehavior EmptyBodyBehavior { get; set; }  // gets or sets the value which decides if empty bodies are treated as valid inputs
+
+   public static BindingInfo? GetBindingInfo(IEnumerable<object> attributes)
+   {
+      var bindingInfo = new BindingInfo();
+      var isBindingInfoPresent = false;
+
+      foreach (var binderModelNameAttribute in attributes.OfType<IModelNameProvider>())  // BinderModelName
+      {
+         isBindingInfoPresent = true;
+         if (binderModelNameAttribute?.Name != null)
+         {
+            bindingInfo.BinderModelName = binderModelNameAttribute.Name;
+            break;
+         }
+      }
+
+      foreach (var binderTypeAttribute in attributes.OfType<IBinderTypeProviderMetadata>())  // BinderType
+      {
+         isBindingInfoPresent = true;
+         if (binderTypeAttribute.BinderType != null)
+         {
+            bindingInfo.BinderType = binderTypeAttribute.BinderType;
+            break;
+         }
+      }
+    
+      foreach (var bindingSourceAttribute in attributes.OfType<IBindingSourceMetadata>())  // BindingSource
+      {
+         isBindingInfoPresent = true;
+         if (bindingSourceAttribute.BindingSource != null)
+         {
+            bindingInfo.BindingSource = bindingSourceAttribute.BindingSource;
+            break;
+         }
+      }
+
+      var propertyFilterProviders = attributes.OfType<IPropertyFilterProvider>().ToArray();  // PropertyFilterProvider
+      if (propertyFilterProviders.Length == 1)
+      {
+         isBindingInfoPresent = true;
+         bindingInfo.PropertyFilterProvider = propertyFilterProviders[0];
+      }
+      else if (propertyFilterProviders.Length > 1)
+      {
+         isBindingInfoPresent = true;
+         bindingInfo.PropertyFilterProvider = new CompositePropertyFilterProvider(propertyFilterProviders);
+      }
+
+      foreach (var requestPredicateProvider in attributes.OfType<IRequestPredicateProvider>())  // RequestPredicate
+      {
+         isBindingInfoPresent = true;
+         if (requestPredicateProvider.RequestPredicate != null)
+         {
+            bindingInfo.RequestPredicate = requestPredicateProvider.RequestPredicate;
+            break;
+         }
+      }
+
+      foreach (var configureEmptyBodyBehavior in attributes.OfType<IConfigureEmptyBodyBehavior>())
+      {
+         isBindingInfoPresent = true;
+         bindingInfo.EmptyBodyBehavior = configureEmptyBodyBehavior.EmptyBodyBehavior;
+         break;
+      }
+ 
+      return isBindingInfoPresent ? bindingInfo : null;
+   }
+
+   public static BindingInfo? GetBindingInfo(IEnumerable<object> attributes, ModelMetadata modelMetadata)
+   {
+      var bindingInfo = GetBindingInfo(attributes);
+      var isBindingInfoPresent = bindingInfo != null;
+
+      if (bindingInfo == null)
+      {
+         bindingInfo = new BindingInfo();
+      }
+
+      isBindingInfoPresent |= bindingInfo.TryApplyBindingInfo(modelMetadata);
+      
+      return isBindingInfoPresent ? bindingInfo : null;
+   }
+
+   public bool TryApplyBindingInfo(ModelMetadata modelMetadata)
+   {
+      var isBindingInfoPresent = false;
+      if (BinderModelName == null && modelMetadata.BinderModelName != null)
+      {
+         isBindingInfoPresent = true;
+         BinderModelName = modelMetadata.BinderModelName;
+      }
+ 
+      if (BinderType == null && modelMetadata.BinderType != null)
+      {
+         isBindingInfoPresent = true;
+         BinderType = modelMetadata.BinderType;
+      }
+ 
+      if (BindingSource == null && modelMetadata.BindingSource != null)
+      {
+         isBindingInfoPresent = true;
+         BindingSource = modelMetadata.BindingSource;
+      }
+ 
+      if (PropertyFilterProvider == null && modelMetadata.PropertyFilterProvider != null)
+      {
+         isBindingInfoPresent = true;
+         PropertyFilterProvider = modelMetadata.PropertyFilterProvider;
+      }
+
+      if (EmptyBodyBehavior == EmptyBodyBehavior.Default && BindingSource == BindingSource.Body &&
+         (modelMetadata.NullabilityState == NullabilityState.Nullable || modelMetadata.IsNullableValueType || modelMetadata.HasDefaultValue))
+      {
+         isBindingInfoPresent = true;
+         EmptyBodyBehavior = EmptyBodyBehavior.Allow;
+      }
+ 
+      return isBindingInfoPresent;
+   }
+
+   private sealed class CompositePropertyFilterProvider : IPropertyFilterProvider
+   {
+      private readonly IEnumerable<IPropertyFilterProvider> _providers;
+ 
+      public CompositePropertyFilterProvider(IEnumerable<IPropertyFilterProvider> providers)
+      {
+          _providers = providers;
+      }
+ 
+      public Func<ModelMetadata, bool> PropertyFilter => CreatePropertyFilter();
+
+      private Func<ModelMetadata, bool> CreatePropertyFilter()
+      {
+         var propertyFilters = _providers.Select(p => p.PropertyFilter).Where(p => p != null);
+
+         return (m) => 
+         {
+            foreach (var propertyFilter in propertyFilters) {
+               if (!propertyFilter(m))
+                  return false;         
+            }
+ 
+            return true;
+         };
+      }
+   }
+}
+//----------------------Ʌ
+
+//---------------------------------------V
+public abstract class ModelBindingContext
+{
+   public abstract ActionContext ActionContext
+   public abstract string? BinderModelName { get; set; }
+   public abstract BindingSource? BindingSource { get; set; }
+   public abstract string FieldName { get; set; }
+   public virtual HttpContext HttpContext => ActionContext?.HttpContext!;
+   public abstract bool IsTopLevelObject { get; set; }
+   public abstract object? Model { get; set; }
+   public abstract ModelMetadata ModelMetadata { get; set; }
+   public abstract string ModelName { get; set; }
+   public string OriginalModelName { get; protected set; } = default!;
+   public abstract ModelStateDictionary ModelState { get; set; }
+   public virtual Type ModelType => ModelMetadata.ModelType;
+   public abstract Func<ModelMetadata, bool>? PropertyFilter { get; set; }
+   public abstract ValidationStateDictionary ValidationState { get; set; }
+   public abstract IValueProvider ValueProvider { get; set; }
+   public abstract ModelBindingResult Result { get; set; }
+   public abstract NestedScope EnterNestedScope(ModelMetadata modelMetadata, string fieldName, string modelName, object? model);
+   public abstract NestedScope EnterNestedScope();
+   protected abstract void ExitNestedScope();
+   
+   public readonly struct NestedScope : IDisposable
+   {
+      private readonly ModelBindingContext _context;
+
+      public NestedScope(ModelBindingContext context)
+      {
+         _context = context;
+      }
+
+      public void Dispose()
+      {
+         _context.ExitNestedScope();
+      }
+   }
+}
+//---------------------------------------Ʌ
+
+//-------------------V
+public abstract class ModelBinderProviderContext
+{
+   public abstract IModelBinder CreateBinder(ModelMetadata metadata);
+
+   public virtual IModelBinder CreateBinder(ModelMetadata metadata, BindingInfo bindingInfo) => throw new NotSupportedException();
+
+   public abstract BindingInfo BindingInfo { get; }
+
+   public abstract ModelMetadata Metadata { get; }
+
+   public abstract IModelMetadataProvider MetadataProvider { get; }
+
+   public virtual IServiceProvider Services { get; } = default!;
+}
+//-------------------Ʌ
 
 public interface IModelBinder
 {
@@ -3939,6 +4744,384 @@ public interface IModelBinderProvider
 {
    IModelBinder? GetBinder(ModelBinderProviderContext context);
 }
+
+
+//----------------------------------------V
+public class SimpleTypeModelBinderProvider : IModelBinderProvider
+{
+   public IModelBinder? GetBinder(ModelBinderProviderContext context)
+   {
+      if (!context.Metadata.IsComplexType)
+      {
+         var loggerFactory = context.Services.GetRequiredService<ILoggerFactory>();
+         return new SimpleTypeModelBinder(context.Metadata.ModelType, loggerFactory);
+      }
+
+      return null;
+   }
+}
+
+public class SimpleTypeModelBinder : IModelBinder
+{
+   private readonly TypeConverter _typeConverter;
+   private readonly ILogger _logger;
+
+   public SimpleTypeModelBinder(Type type, ILoggerFactory loggerFactory)
+   {
+      _typeConverter = TypeDescriptor.GetConverter(type);
+      _logger = loggerFactory.CreateLogger<SimpleTypeModelBinder>();
+   }
+
+   public Task BindModelAsync(ModelBindingContext bindingContext)
+   {
+      var valueProviderResult = bindingContext.ValueProvider.GetValue(bindingContext.ModelName);
+      if (valueProviderResult == ValueProviderResult.None) {
+         return Task.CompletedTask;
+      }
+
+      bindingContext.ModelState.SetModelValue(bindingContext.ModelName, valueProviderResult);
+
+      try
+      {
+         var value = valueProviderResult.FirstValue;
+         
+         object? model;
+         if (bindingContext.ModelType == typeof(string))
+         {
+            // already have a string. No further conversion required but handle ConvertEmptyStringToNull.
+            if (bindingContext.ModelMetadata.ConvertEmptyStringToNull && string.IsNullOrWhiteSpace(value))
+            {
+               model = null;
+            }
+            else
+            {
+               model = value;
+            }
+         }
+         else if (string.IsNullOrWhiteSpace(value))
+         {
+            // other than the StringConverter, converters Trim() the value then throw if the result is empty.
+            model = null;
+         }
+         else
+         {
+            model = _typeConverter.ConvertFrom(context: null, culture: valueProviderResult.Culture, value: value);
+         }
+         CheckModel(bindingContext, valueProviderResult, model);
+
+         return Task.CompletedTask;
+      }
+      catch (Exception exception)
+      {
+         var isFormatException = exception is FormatException;
+         if (!isFormatException && exception.InnerException != null)
+         {
+            // TypeConverter throws System.Exception wrapping the FormatException, so we capture the inner exception.
+            exception = ExceptionDispatchInfo.Capture(exception.InnerException).SourceException;
+         }
+
+         bindingContext.ModelState.TryAddModelError(bindingContext.ModelName, exception, bindingContext.ModelMetadata);
+
+         // were able to find a converter for the type but conversion failed.
+         return Task.CompletedTask;
+      }
+   }
+
+   protected virtual void CheckModel(ModelBindingContext bindingContext, ValueProviderResult valueProviderResult, object? model)
+   {
+      if (model == null && !bindingContext.ModelMetadata.IsReferenceOrNullableType)
+      {
+         bindingContext.ModelState.TryAddModelError(
+            bindingContext.ModelName,
+            bindingContext.ModelMetadata.ModelBindingMessageProvider.ValueMustNotBeNullAccessor(valueProviderResult.ToString())
+         );
+      }
+      else
+      {
+         bindingContext.Result = ModelBindingResult.Success(model);
+      }
+   }
+}
+//----------------------------------------Ʌ
+
+//-------------------------------------------V
+public class ComplexObjectModelBinderProvider : IModelBinderProvider
+{
+   public IModelBinder? GetBinder(ModelBinderProviderContext context)
+   {
+      var metadata = context.Metadata;
+      if (metadata.IsComplexType && !metadata.IsCollectionType)
+      {
+         var loggerFactory = context.Services.GetRequiredService<ILoggerFactory>();
+         var logger = loggerFactory.CreateLogger<ComplexObjectModelBinder>();
+         var parameterBinders = GetParameterBinders(context);
+
+         var propertyBinders = new Dictionary<ModelMetadata, IModelBinder>();
+         for (var i = 0; i < context.Metadata.Properties.Count; i++)
+         {
+            var property = context.Metadata.Properties[i];
+            propertyBinders.Add(property, context.CreateBinder(property));
+         }
+
+         return new ComplexObjectModelBinder(propertyBinders, parameterBinders, logger);
+      }
+
+      return null;
+   }
+
+   private static IReadOnlyList<IModelBinder> GetParameterBinders(ModelBinderProviderContext context)
+   {
+      var boundConstructor = context.Metadata.BoundConstructor;
+      if (boundConstructor is null)
+      {
+         return Array.Empty<IModelBinder>();
+      }
+
+      var parameterBinders = boundConstructor.BoundConstructorParameters!.Count == 0 
+         ? Array.Empty<IModelBinder>() : new IModelBinder[boundConstructor.BoundConstructorParameters.Count];
+      
+      for (var i = 0; i < parameterBinders.Length; i++)
+      {
+         parameterBinders[i] = context.CreateBinder(boundConstructor.BoundConstructorParameters[i]);
+      }
+
+      return parameterBinders;
+   }
+}
+//-------------------------------------------Ʌ
+
+//--------------------------------------------------V
+public sealed partial class ComplexObjectModelBinder : IModelBinder
+{
+   internal const int NoDataAvailable = 0;
+   internal const int GreedyPropertiesMayHaveData = 1;
+   internal const int ValueProviderDataAvailable = 2;
+
+   private readonly IDictionary<ModelMetadata, IModelBinder> _propertyBinders;
+   private readonly IReadOnlyList<IModelBinder> _parameterBinders;
+   private readonly ILogger _logger;
+   private Func<object>? _modelCreator;
+
+   internal ComplexObjectModelBinder(
+      IDictionary<ModelMetadata, IModelBinder> propertyBinders, 
+      IReadOnlyList<IModelBinder> parameterBinders, 
+      ILogger<ComplexObjectModelBinder> logger)
+   {
+      _propertyBinders = propertyBinders;
+      _parameterBinders = parameterBinders;
+      _logger = logger;
+   }
+
+   public Task BindModelAsync(ModelBindingContext bindingContext)
+   {
+      var parameterData = CanCreateModel(bindingContext);
+      if (parameterData == NoDataAvailable)
+      {
+         return Task.CompletedTask;
+      }
+
+      return BindModelCoreAsync(bindingContext, parameterData);
+   }
+
+   private async Task BindModelCoreAsync(ModelBindingContext bindingContext, int propertyData)
+   {
+      // create model first (if necessary) to avoid reporting errors about properties when activation fails.
+      var attemptedBinding = false;
+      var bindingSucceeded = false;
+
+      var modelMetadata = bindingContext.ModelMetadata;
+      var boundConstructor = modelMetadata.BoundConstructor;
+
+      if (boundConstructor != null)
+      {
+         var values = new object[boundConstructor.BoundConstructorParameters!.Count];
+         var (attemptedParameterBinding, parameterBindingSucceeded) = await BindParametersAsync(
+            bindingContext,
+            propertyData,
+            boundConstructor.BoundConstructorParameters,
+            values
+         );
+ 
+         attemptedBinding |= attemptedParameterBinding;
+         bindingSucceeded |= parameterBindingSucceeded;
+ 
+         if (!CreateModel(bindingContext, boundConstructor, values))
+         {
+            return;
+         }
+      }
+      else if (bindingContext.Model == null)
+      {
+         CreateModel(bindingContext);
+      }
+
+      var (attemptedPropertyBinding, propertyBindingSucceeded) = await BindPropertiesAsync(bindingContext, propertyData, modelMetadata.BoundProperties);
+
+      attemptedBinding |= attemptedPropertyBinding;
+      bindingSucceeded |= propertyBindingSucceeded;
+
+      if (!attemptedBinding && bindingContext.IsTopLevelObject && modelMetadata.IsBindingRequired)
+      {
+         var messageProvider = modelMetadata.ModelBindingMessageProvider;
+         var message = messageProvider.MissingBindRequiredValueAccessor(bindingContext.FieldName);
+         bindingContext.ModelState.TryAddModelError(bindingContext.ModelName, message);
+      }
+
+      if (!bindingContext.IsTopLevelObject && !bindingSucceeded && propertyData == GreedyPropertiesMayHaveData)
+      {
+         bindingContext.Result = ModelBindingResult.Failed();
+         return;
+      }
+ 
+      bindingContext.Result = ModelBindingResult.Success(bindingContext.Model);
+   }
+
+   internal static bool CreateModel(ModelBindingContext bindingContext, ModelMetadata boundConstructor, object[] values)
+   {
+      try
+      {
+         bindingContext.Model = boundConstructor.BoundConstructorInvoker!(values);
+         return true;
+      }
+      catch (Exception ex)
+      {
+         AddModelError(ex, bindingContext.ModelName, bindingContext);
+         bindingContext.Result = ModelBindingResult.Failed();
+         return false;
+      }
+   }
+
+   internal void CreateModel(ModelBindingContext bindingContext)
+   {
+      if (_modelCreator == null)
+      {
+         var modelType = bindingContext.ModelType;
+         if (modelType.IsAbstract || modelType.GetConstructor(Type.EmptyTypes) == null)
+         {
+            var metadata = bindingContext.ModelMetadata;
+            switch (metadata.MetadataKind)
+            {
+               case ModelMetadataKind.Parameter:
+                  throw new InvalidOperationException(...);
+               case ModelMetadataKind.Property:
+                  throw new InvalidOperationException(...);
+               case ModelMetadataKind.Type:
+                  throw new InvalidOperationException(...);
+            }
+         }
+ 
+         _modelCreator = Expression.Lambda<Func<object>>(Expression.New(bindingContext.ModelType)).Compile();
+      }
+
+      bindingContext.Model = _modelCreator();
+   }
+
+   private async ValueTask<(bool attemptedBinding, bool bindingSucceeded)> BindParametersAsync(
+      ModelBindingContext bindingContext,
+      int propertyData,
+      IReadOnlyList<ModelMetadata> parameters,
+      object?[] parameterValues)
+   {
+      // ...
+   }
+
+   private async ValueTask<(bool attemptedBinding, bool bindingSucceeded)> BindPropertiesAsync(
+      ModelBindingContext bindingContext,
+      int propertyData,
+      IReadOnlyList<ModelMetadata> boundProperties)
+   {
+      // ...
+   }
+
+   internal static bool CanBindItem(ModelBindingContext bindingContext, ModelMetadata propertyMetadata)
+   {
+      var metadataProviderFilter = bindingContext.ModelMetadata.PropertyFilterProvider?.PropertyFilter;
+      if (metadataProviderFilter?.Invoke(propertyMetadata) == false)
+         return false;
+ 
+      if (bindingContext.PropertyFilter?.Invoke(propertyMetadata) == false)
+         return false;
+ 
+      if (!propertyMetadata.IsBindingAllowed)
+          return false;
+ 
+      if (propertyMetadata.MetadataKind == ModelMetadataKind.Property && propertyMetadata.IsReadOnly)
+      {
+         // determine if we can update a readonly property (such as a collection).
+         return CanUpdateReadOnlyProperty(propertyMetadata.ModelType);
+      }
+ 
+      return true;
+   }
+
+   private static async ValueTask<ModelBindingResult> BindParameterAsync(
+      ModelBindingContext bindingContext,
+      ModelMetadata parameter,
+      IModelBinder parameterBinder,
+      string fieldName,
+      string modelName)
+   { 
+      ModelBindingResult result;
+      using (bindingContext.EnterNestedScope(modelMetadata: parameter, fieldName: fieldName, modelName: modelName, model: null))
+      {
+         await parameterBinder.BindModelAsync(bindingContext);
+         result = bindingContext.Result;
+      }
+ 
+      if (!result.IsModelSet && parameter.IsBindingRequired)
+      {
+         var message = parameter.ModelBindingMessageProvider.MissingBindRequiredValueAccessor(fieldName);
+         bindingContext.ModelState.TryAddModelError(modelName, message);
+      }
+ 
+      return result;
+   }
+
+   internal int CanCreateModel(ModelBindingContext bindingContext)
+   {
+      var isTopLevelObject = bindingContext.IsTopLevelObject;
+      var bindingSource = bindingContext.BindingSource;
+      if (!isTopLevelObject && bindingSource != null && bindingSource.IsGreedy)
+      {
+         return NoDataAvailable;
+      }
+ 
+      // Create the object if:
+      // 1. It is a top level model.
+      if (isTopLevelObject)
+      {
+         return ValueProviderDataAvailable;
+      }
+ 
+      // 2. Any of the model properties can be bound.
+      return CanBindAnyModelItem(bindingContext);
+   }
+
+   private int CanBindAnyModelItem(ModelBindingContext bindingContext)
+   {
+      // ...
+   }
+
+   private static void AddModelError(Exception exception, string modelName, ModelBindingContext bindingContext)
+   {
+      var targetInvocationException = exception as TargetInvocationException;
+      if (targetInvocationException?.InnerException != null)
+      {
+         exception = targetInvocationException.InnerException;
+      }
+ 
+      // do not add an error message if a binding error has already occurred for this property.
+      var modelState = bindingContext.ModelState;
+      var validationState = modelState.GetFieldValidationState(modelName);
+      if (validationState == ModelValidationState.Unvalidated)
+      {
+         modelState.AddModelError(modelName, exception, bindingContext.ModelMetadata);
+      }
+   }
+
+   // ...
+}
+//--------------------------------------------------Ʌ
 
 //----------------------------------V
 public class BodyModelBinderProvider : IModelBinderProvider

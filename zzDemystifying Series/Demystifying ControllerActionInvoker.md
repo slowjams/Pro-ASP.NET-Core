@@ -167,35 +167,46 @@ public static class MvcServiceCollectionExtensions
 }
 ```
 
-Part A - (denoted as `o`) Overall
+**Part A** - (denoted as `o`) Overall
 
-Part B - (denoted as `c`) How controller instances are created
+**Part B** - (denoted as `c`) How controller instances are created
 
-Part C - (denoted as `b` and `a`) How Model Binding Works + How Action method Executes
+**Part C** - (denoted as `b` and `a`) How Model Binding Works + How Action method Executes
 
-Part D - (denoted as `d`) How Filters information discovered
+**Part D** - (denoted as `d`) How Filters information discovered; d5.1 shows how Filter instance are created by compiler and wrapped into `ControllerModel`, which is further wrapped in `ApplicationModel`, then `ControllerActionDescriptorBuilder.Build(applicationModelInstance)` (d5.6)
 
-Part E - (denoted as `f`) How Filters get executed in pipeline
+**Part E** - (denoted as `f`) How Filters get executed in pipeline
 
+
+`ActionEndpointFactory`-
 
 ```C#
 public static class ControllerEndpointRouteBuilderExtensions 
 {
-   public static ControllerActionEndpointConventionBuilder MapControllers(this IEndpointRouteBuilder endpoints)  
+   public static ControllerActionEndpointConventionBuilder MapControllers(this IEndpointRouteBuilder endpointsBuilder)  
    {                                                                                                             
-      EnsureControllerServices(endpoints);
-      return GetOrCreateDataSource(endpoints).DefaultBuilder;
+      EnsureControllerServices(endpointsBuilder);
+      return GetOrCreateDataSource(endpointsBuilder).DefaultBuilder;
    }
 
-   private static ControllerActionEndpointDataSource GetOrCreateDataSource(IEndpointRouteBuilder endpoints)
+   public static ControllerActionEndpointConventionBuilder MapDefaultControllerRoute(this IEndpointRouteBuilder endpointsBuilder)
    {
-      var dataSource = endpoints.DataSources.OfType<ControllerActionEndpointDataSource>().FirstOrDefault();
+      EnsureControllerServices(endpointsBuilder);
+
+      var dataSource = GetOrCreateDataSource(endpointsBuilder);
+      
+      return dataSource.AddRoute("default", "{controller=Home}/{action=Index}/{id?}", defaults: null, constraints: null, dataTokens: null);
+   }
+
+   private static ControllerActionEndpointDataSource GetOrCreateDataSource(IEndpointRouteBuilder endpointsBuilder)
+   {
+      var dataSource = endpointsBuilder.DataSources.OfType<ControllerActionEndpointDataSource>().FirstOrDefault();
       if (dataSource == null) 
       {
-         var orderProvider = endpoints.ServiceProvider.GetRequiredService<OrderedEndpointsSequenceProviderCache>();
-         var factory = endpoints.ServiceProvider.GetRequiredService<ControllerActionEndpointDataSourceFactory>();    // <--------------------------- o1
-         dataSource = factory.Create(orderProvider.GetOrCreateOrderedEndpointsSequenceProvider(endpoints));
-         endpoints.DataSources.Add(dataSource);
+         var orderProvider = endpointsBuilder.ServiceProvider.GetRequiredService<OrderedEndpointsSequenceProviderCache>();
+         var factory = endpointsBuilder.ServiceProvider.GetRequiredService<ControllerActionEndpointDataSourceFactory>();    // <--------------------------- o1
+         dataSource = factory.Create(orderProvider.GetOrCreateOrderedEndpointsSequenceProvider(endpointsBuilder));          // <--------------------------- o2.a
+         endpointsBuilder.DataSources.Add(dataSource);      // <--------------------------- o4
       }
 
       return dataSource;
@@ -229,7 +240,7 @@ internal sealed class ControllerActionEndpointDataSourceFactory   // <----------
  
    public ControllerActionEndpointDataSource Create(OrderedEndpointsSequenceProvider orderProvider)
    {
-       return new ControllerActionEndpointDataSource(_dataSourceIdProvider, _actions, _factory, orderProvider);   // <--------------------------- o2
+       return new ControllerActionEndpointDataSource(_dataSourceIdProvider, _actions, _factory, orderProvider);   // <--------------------------- o2.b_
    }
 }
 //-------------------------------------------------------------Ʌ
@@ -338,10 +349,20 @@ internal sealed partial class DefaultActionDescriptorCollectionProvider : Action
       {
          _actionDescriptorProviders[i].OnProvidersExecuted(context);
       }
+      
+      var oldCancellationTokenSource = _cancellationTokenSource;
+
+      _collection = new ActionDescriptorCollection(new ReadOnlyCollection<ActionDescriptor>(context.Results), _version++);
+
       // ...
    }
 }
 //---------------------------------------------------------------------Ʌ
+
+public class ActionDescriptorProviderContext
+{
+   public IList<ActionDescriptor> Results { get; } = new List<ActionDescriptor>();
+}
 
 public interface IActionDescriptorProvider
 {
@@ -362,9 +383,9 @@ internal sealed class ControllerActionDescriptorProvider : IActionDescriptorProv
 
    public void OnProvidersExecuting(ActionDescriptorProviderContext context)
    {
-      foreach (var descriptor in GetDescriptors())
+      foreach (ControllerActionDescriptor descriptor in GetDescriptors())
       {
-         context.Results.Add(descriptor);
+         context.Results.Add(descriptor);    // <---------------------------------------
       }
    }
 
@@ -677,6 +698,13 @@ public class ControllerModel : ICommonModel, IFilterModel, IApiExplorerModel
 }
 //--------------------------------------------------------------------------Ʌ
 
+public interface IApplicationModelProvider
+{
+   int Order { get; }
+   void OnProvidersExecuting(ApplicationModelProviderContext context);
+   void OnProvidersExecuted(ApplicationModelProviderContext context);
+}
+
 //------------------------------------------------------------------------V
 internal class DefaultApplicationModelProvider : IApplicationModelProvider    // <---------------------------------d5
 {
@@ -709,6 +737,7 @@ internal class DefaultApplicationModelProvider : IApplicationModelProvider    //
          if (controllerModel == null)
             continue;
          
+         // context.Result is ApplicationModel, its Controllers property is IList<ControllerModel>
          context.Result.Controllers.Add(controllerModel);               // <--------------------------------------------d5.4
          controllerModel.Application = context.Result;
 
@@ -944,6 +973,7 @@ public class ActionDescriptorCollection
    }
 
    public IReadOnlyList<ActionDescriptor> Items { get; }
+   
    public int Version { get; }
 }
 //-------------------------------------Ʌ
@@ -1038,7 +1068,7 @@ internal abstract class ActionEndpointDataSourceBase : EndpointDataSource, IDisp
    protected readonly List<Action<EndpointBuilder>> Conventions;
    protected readonly List<Action<EndpointBuilder>> FinallyConventions;
 
-   private List<Endpoint>? _endpoints;
+   private List<Endpoint>? _endpoints;      // <-----------------------------------------------that's why it is EndpointDataSource
    private CancellationTokenSource? _cancellationTokenSource;
    private IChangeToken? _changeToken;
    private IDisposable? _disposable;
@@ -1110,7 +1140,7 @@ internal abstract class ActionEndpointDataSourceBase : EndpointDataSource, IDisp
          var oldCancellationTokenSource = _cancellationTokenSource;
  
          // step 2 - update endpoints
-         _endpoints = endpoints;
+         _endpoints = endpoints;      // <--------------------------------at this point EndpointDataSource has all the Endpoint
  
          // step 3 - create new change token
          _cancellationTokenSource = new CancellationTokenSource();
@@ -1124,8 +1154,8 @@ internal abstract class ActionEndpointDataSourceBase : EndpointDataSource, IDisp
 //--------------------------------------------------Ʌ
 
 //-------------------------------------------------------------------------------------V
-internal sealed class ControllerActionEndpointDataSource : ActionEndpointDataSourceBase     // <--------------------------------o2
-{                                                                                       // <----------d1, ActionEndpointDataSourceBase contains IActionDescriptorCollectionProvider
+internal sealed class ControllerActionEndpointDataSource : ActionEndpointDataSourceBase     // <--------------------------------o3
+{                                                                                           // <----d1, ActionEndpointDataSourceBase contains IActionDescriptorCollectionProvider
    private readonly ActionEndpointFactory _endpointFactory;
    private readonly OrderedEndpointsSequenceProvider _orderSequence;
    private readonly List<ConventionalRouteEntry> _routes;
@@ -1257,21 +1287,15 @@ internal sealed class ActionEndpointFactory
             RequestDelegate = _requestDelegate,
          };
 
-         AddActionDataToBuilder(
-            builder,
-            routeNames,
-            action,
-            routeName: null,
-            dataTokens: null,
-            suppressLinkGeneration: false,
-            suppressPathMatching: false,
+         AddActionDataToBuilder(builder, routeNames, action, routeName: null, dataTokens: null, suppressLinkGeneration: false, suppressPathMatching: false,
             groupConventions: groupConventions,
             conventions: conventions,
             perRouteConventions: Array.Empty<Action<EndpointBuilder>>(),
             groupFinallyConventions: groupFinallyConventions,
             finallyConventions: finallyConventions,
             perRouteFinallyConventions: Array.Empty<Action<EndpointBuilder>>());
-            endpoints.Add(builder.Build());
+
+         endpoints.Add(builder.Build());
       }
 
       if (action.AttributeRouteInfo?.Template == null)
@@ -1291,7 +1315,7 @@ internal sealed class ActionEndpointFactory
 
             var requestDelegate = CreateRequestDelegate(action, route.DataTokens) ?? _requestDelegate;  // <-------------------------------
 
-            var builder = new RouteEndpointBuilder(requestDelegate, updatedRoutePattern, route.Order)
+            var builder = new RouteEndpointBuilder(requestDelegate, updatedRoutePattern, route.Order)   // requestDelegate is the same for every Endpoint
             {
                DisplayName = action.DisplayName,
             };
@@ -1373,7 +1397,7 @@ internal sealed class ActionEndpointFactory
          routeData.PushState(router: null, context.Request.RouteValues, new RouteValueDictionary(dataTokens?.DataTokens));
  
          var action = endpoint.Metadata.GetMetadata<ActionDescriptor>()!;
-         var actionContext = new ActionContext(context, routeData, action);
+         var actionContext = new ActionContext(context, routeData, action);   // <-----------------------------------------------------create an instance of ActionContext
  
          if (invokerFactory == null)
          {
@@ -1386,6 +1410,15 @@ internal sealed class ActionEndpointFactory
          return invoker.InvokeAsync();                                // <----------------------------------------------------f1.4, f2.4c_
       };                                                              
    }
+   //
+   private sealed class InertEndpointBuilder : EndpointBuilder
+   {
+      public override Endpoint Build()
+      {
+         return new Endpoint(RequestDelegate, new EndpointMetadataCollection(Metadata), DisplayName);
+      }
+   }
+   //
 }
 //-----------------------------------------Ʌ
 
@@ -1409,6 +1442,7 @@ internal sealed class ActionInvokerFactory : IActionInvokerFactory      // <----
 {
    private readonly IActionInvokerProvider[] _actionInvokerProviders;   // <----------------------------f1.1
                                                                         // rely on ControllerActionInvokerProvider to set IActionInvoker to ActionInvokerProviderContext
+                                                                        // ControllerActionInvokerProvider creates an instance of ControllerContext
 
    public ActionInvokerFactory(IEnumerable<IActionInvokerProvider> actionInvokerProviders)
    {
@@ -1509,6 +1543,7 @@ internal sealed class DefaultControllerActivator : IControllerActivator
       Release(context, controller);
       return default;
    }
+}
 //----------------------------------------------ɅɅ
 
 //----------------------------------------------VV
@@ -1538,7 +1573,7 @@ internal sealed class DefaultControllerFactory : IControllerFactory
 
    public object CreateController(ControllerContext context)
    {
-      var controller = _controllerActivator.Create(context);
+      var controller = _controllerActivator.Create(context);   // <-------------------------
       foreach (var propertyActivator in _propertyActivators)
       {
          propertyActivator.Activate(context, controller);
@@ -1688,7 +1723,7 @@ public class ControllerActivatorProvider : IControllerActivatorProvider
    private static readonly Action<ControllerContext, object> _dispose = Dispose;
    private static readonly Func<ControllerContext, object, ValueTask> _disposeAsync = DisposeAsync;
    private static readonly Func<ControllerContext, object, ValueTask> _syncDisposeAsync = SyncDisposeAsync;
-   private readonly Func<ControllerContext, object>? _controllerActivatorCreate;
+   private readonly Func<ControllerContext, object>? _controllerActivatorCreate;   // <---------------------
    private readonly Action<ControllerContext, object>? _controllerActivatorRelease;
    private readonly Func<ControllerContext, object, ValueTask>? _controllerActivatorReleaseAsync;
 
@@ -2076,6 +2111,13 @@ public class ActionInvokerProviderContext
 }
 //---------------------------------------Ʌ
 
+public interface IActionInvokerProvider
+{
+   int Order { get; }
+   void OnProvidersExecuting(ActionInvokerProviderContext context);
+   void OnProvidersExecuted(ActionInvokerProviderContext context);
+}
+
 //----------------------------------------------------------------------------V
 internal sealed class ControllerActionInvokerProvider : IActionInvokerProvider      // <------------------------- f2
 {
@@ -2110,7 +2152,7 @@ internal sealed class ControllerActionInvokerProvider : IActionInvokerProvider  
    {
       if (context.ActionContext.ActionDescriptor is ControllerActionDescriptor)
       {
-         var controllerContext = new ControllerContext(context.ActionContext)   // <-------------------- create ControllerContext instance
+         var controllerContext = new ControllerContext(context.ActionContext)   // <----------------------------------------! create ControllerContext instance 
          {
             ValueProviderFactories = new CopyOnWriteList<IValueProviderFactory>(_valueProviderFactories)
          };
@@ -2865,7 +2907,7 @@ internal partial class ControllerActionInvoker : ResourceInvoker, IActionInvoker
    {
       switch (next)
       {
-         case State.ActionBegin:
+         case State.ActionBegin:    // <------------------------------ ControllerActionInvoker only starts with ActionBegin while ResourceInvoker starts with AuthorizationBegin
             var controllerContext = _controllerContext;
             _cursor.Reset();
 
@@ -4038,6 +4080,38 @@ public class QueryStringValueProviderFactory : IValueProviderFactory
    }
 }
 
+public class FormValueProviderFactory 
+{
+   public Task CreateValueProviderAsync(ValueProviderFactoryContext context)
+   {
+      var request = context.ActionContext.HttpContext.Request;
+      if (request.HasFormContentType)
+         return AddValueProviderAsync(context);   // allocating a Task only when the body is form data
+
+      return Task.CompletedTask;
+   }
+
+   private static async Task AddValueProviderAsync(ValueProviderFactoryContext context)
+   {
+      var request = context.ActionContext.HttpContext.Request;
+      IFormCollection form;
+
+      try {
+         form = await request.ReadFormAsync();
+      }
+      catch (InvalidDataException ex) {  
+         throw new ValueProviderException(Resources.FormatFailedToReadRequestForm(ex.Message), ex);
+      }
+      catch (IOException ex) {
+         throw new ValueProviderException(Resources.FormatFailedToReadRequestForm(ex.Message), ex);
+      }
+
+      var valueProvider = new FormValueProvider(BindingSource.Form, form, CultureInfo.CurrentCulture);
+ 
+      context.ValueProviders.Add(valueProvider);
+   }
+}
+
 //----------------------------------------------------------------------------V
 public abstract class BindingSourceValueProvider : IBindingSourceValueProvider
 {
@@ -4115,6 +4189,60 @@ public class QueryStringValueProvider : BindingSourceValueProvider, IEnumerableV
    }
 }
 //------------------------------------------------------------------------------------------Ʌ
+
+//-----------------------------------------------------------------------------------V
+public class FormValueProvider : BindingSourceValueProvider, IEnumerableValueProvider
+{
+   private readonly IFormCollection _values;
+   private readonly HashSet<string?>? _invariantValueKeys;
+   private PrefixContainer? _prefixContainer;
+
+   public FormValueProvider(BindingSource bindingSource, IFormCollection values, CultureInfo? culture) : base(bindingSource)
+   {
+      _values = values;
+ 
+      if (_values.TryGetValue(FormValueHelper.CultureInvariantFieldName, out var invariantKeys) && invariantKeys.Count > 0)
+      {
+         _invariantValueKeys = new(invariantKeys, StringComparer.OrdinalIgnoreCase);
+      }
+ 
+      Culture = culture;
+   }
+
+   public CultureInfo? Culture { get; }
+
+   protected PrefixContainer PrefixContainer {
+      get {
+         if (_prefixContainer == null)
+            _prefixContainer = new PrefixContainer(_values.Keys);
+         return _prefixContainer;
+        }
+   }
+
+   public override bool ContainsPrefix(string prefix) => PrefixContainer.ContainsPrefix(prefix);
+   
+   public virtual IDictionary<string, string> GetKeysFromPrefix(string prefix) => PrefixContainer.GetKeysFromPrefix(prefix);
+   
+   public override ValueProviderResult GetValue(string key)
+   {
+      if (key.Length == 0)
+         return ValueProviderResult.None;
+         
+      var values = _values[key];
+      if (values.Count == 0)
+      {
+         return ValueProviderResult.None;
+      }
+      else
+      {
+         var culture = _invariantValueKeys?.Contains(key) == true ? CultureInfo.InvariantCulture : Culture;
+         return new ValueProviderResult(values, culture);
+      }
+   }
+}
+//-----------------------------------------------------------------------------------Ʌ
+
+// public class RouteValueProvider : BindingSourceValueProvider { ... }
 
 //---------------------------------V
 public class CompositeValueProvider :  Collection<IValueProvider>, IEnumerableValueProvider, IBindingSourceValueProvider, IKeyRewriterValueProvider

@@ -149,7 +149,17 @@ public static class ControllerEndpointRouteBuilderExtensions
    public static ControllerActionEndpointConventionBuilder MapControllers(this IEndpointRouteBuilder endpoints)  
    {                                                                                                             
       EnsureControllerServices(endpoints);
+      
       return GetOrCreateDataSource(endpoints).DefaultBuilder;
+   }
+
+   public static ControllerActionEndpointConventionBuilder MapDefaultControllerRoute(this IEndpointRouteBuilder endpoints)
+   {
+      EnsureControllerServices(endpoints);
+
+      var dataSource = GetOrCreateDataSource(endpoints);
+      
+      return dataSource.AddRoute("default", "{controller=Home}/{action=Index}/{id?}", defaults: null, constraints: null, dataTokens: null);
    }
 
    private static ControllerActionEndpointDataSource GetOrCreateDataSource(IEndpointRouteBuilder endpoints)
@@ -327,7 +337,7 @@ internal sealed class ControllerActionDescriptorProvider : IActionDescriptorProv
 
    public void OnProvidersExecuting(ActionDescriptorProviderContext context)
    {
-      foreach (var descriptor in GetDescriptors())
+      foreach (ControllerActionDescriptor descriptor in GetDescriptors())
       {
          context.Results.Add(descriptor);
       }
