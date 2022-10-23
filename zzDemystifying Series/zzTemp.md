@@ -225,3 +225,100 @@ internal sealed class ActionEndpointFactory
 
 
 ```
+
+
+
+```C#
+
+//
+public interface IActionDescriptorCollectionProvider
+{
+   ActionDescriptorCollection ActionDescriptors { get; }
+}
+
+public abstract class ActionDescriptorCollectionProvider : IActionDescriptorCollectionProvider  
+{
+   public abstract ActionDescriptorCollection ActionDescriptors { get; }
+   public abstract IChangeToken GetChangeToken();
+}
+//
+
+internal sealed partial class DefaultActionDescriptorCollectionProvider : ActionDescriptorCollectionProvider   
+{
+   private readonly IActionDescriptorProvider[] _actionDescriptorProviders;
+   private readonly IActionDescriptorChangeProvider[] _actionDescriptorChangeProviders;
+   private ActionDescriptorCollection? _collection;  // <-----------------------a
+   private readonly ILogger _logger;
+   // ...
+
+   public DefaultActionDescriptorCollectionProvider(
+      IEnumerable<IActionDescriptorProvider> actionDescriptorProviders,
+      IEnumerable<IActionDescriptorChangeProvider> actionDescriptorChangeProviders,
+      ILogger<DefaultActionDescriptorCollectionProvider> logger)
+   {
+      _actionDescriptorProviders = actionDescriptorProviders
+         .OrderBy(p => p.Order)
+         .ToArray();
+
+      _actionDescriptorChangeProviders = actionDescriptorChangeProviders.ToArray();
+
+      ChangeToken.OnChange(GetCompositeChangeToken, UpdateCollection);
+   }
+
+   public override ActionDescriptorCollection ActionDescriptors
+   {
+      get {
+         Initialize();
+         return _collection;
+      }
+   }
+
+   private void Initialize()
+   {
+      if (_collection == null)
+      {
+         // ... call UpdateCollection();
+      }
+   }
+
+   private void UpdateCollection()
+   {
+      // ...
+      var context = new ActionDescriptorProviderContext();
+      for (var i = 0; i < _actionDescriptorProviders.Length; i++)
+      {
+         _actionDescriptorProviders[i].OnProvidersExecuting(context);
+      }
+
+      for (var i = _actionDescriptorProviders.Length - 1; i >= 0; i--)
+      {
+         _actionDescriptorProviders[i].OnProvidersExecuted(context);
+      }
+      
+      var oldCancellationTokenSource = _cancellationTokenSource;
+
+      _collection = new ActionDescriptorCollection(   // <-----------------------b
+         new ReadOnlyCollection<ActionDescriptor>(context.Results), _version++
+      );
+
+      // ...
+   }
+}
+
+
+public class ActionDescriptorCollection
+{
+   public ActionDescriptorCollection(IReadOnlyList<ActionDescriptor> items, 
+                                     int version)
+   {
+      Items = items;
+      Version = version;
+   }
+
+   public IReadOnlyList<ActionDescriptor> Items { get; }
+   
+   public int Version { get; }
+}
+
+
+```

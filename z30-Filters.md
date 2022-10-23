@@ -11,7 +11,7 @@ public class Startup
    {
       // ...
       services.AddScoped<FilterXXXAttribute>();
-      services.Configure<MvcOptions>(opts => opts.Filters.Add(new MessageFilterAttribute("This is the globally-scoped filter")));   // default Order is 0
+      services.Configure<MvcOptions>(opts => opts.Filters.Add(new MessageFilterAttribute("This is the globally-scoped filter")));   // global filters, default Order is 0
    }
 }
 
@@ -109,7 +109,7 @@ public class GuidResponseAttribute : Attribute, IAsyncAlwaysRunResultFilter, IFi
 
    public IFilterMetadata CreateInstance(IServiceProvider serviceProvider)
    {
-      return ActivatorUtilities.GetServiceOrCreateInstance<GuidResponseAttribute>(serviceProvider);
+      return ActivatorUtilities.GetServiceOrCreateInstance<GuidResponseAttribute>(serviceProvider);   // note it is GetServiceOrCreateInstance, not CreateInstance
    }
 
    public async Task OnResultExecutionAsync(ResultExecutingContext context, ResultExecutionDelegate next)
@@ -440,6 +440,13 @@ public class ExceptionContext : FilterContext
 ```
 
 ```C#
+public class FilterCollection : Collection<IFilterMetadata>
+{
+
+}
+```
+
+```C#
 public interface IFilterFactory : IFilterMetadata
 {
    
@@ -450,8 +457,7 @@ public interface IFilterFactory : IFilterMetadata
 }
 
 
-// a filter that creates another filter of ImplementationType, retrieving missing constructor arguments from dependency injection
-public class TypeFilterAttribute : Attribute, IFilterFactory, IOrderedFilter
+public class TypeFilterAttribute : Attribute, IFilterFactory, IOrderedFilter   // <------ don't need to register the type
 {
    private ObjectFactory _factory;
 
@@ -472,7 +478,7 @@ public class TypeFilterAttribute : Attribute, IFilterFactory, IOrderedFilter
    {
       var argumentTypes = Arguments.Select(a => a.GetType()).ToArray();
 
-      _factory = ActivatorUtilities.CreateFactory(ImplementationType, argumentTypes ?? Type.EmptyTypes);
+      _factory = ActivatorUtilities.CreateFactory(ImplementationType, argumentTypes ?? Type.EmptyTypes);  
 
       var filter = (IFilterMetadata)_factory(serviceProvider, Arguments);
 
@@ -485,7 +491,7 @@ public class TypeFilterAttribute : Attribute, IFilterFactory, IOrderedFilter
    }
 }
 
-public class ServiceFilterAttribute : Attribute, IFilterFactory, IOrderedFilter
+public class ServiceFilterAttribute : Attribute, IFilterFactory, IOrderedFilter   // <------need to register the type, see the example below
 {
    public ServiceFilterAttribute(Type type)
    {
@@ -504,7 +510,6 @@ public class ServiceFilterAttribute : Attribute, IFilterFactory, IOrderedFilter
       
       if (filter is IFilterFactory filterFactory)
       {
-         // unwrap filter factories
          filter = filterFactory.CreateInstance(serviceProvider);
       }
 
@@ -513,42 +518,70 @@ public class ServiceFilterAttribute : Attribute, IFilterFactory, IOrderedFilter
 }
 ```
 
+Below is an demo shows the difference between using `TypeFilterAttribute` and `ServiceFilterAttribute`
 
 ```C#
-// example
-public class Startup 
+public class MySampleActionFilter : Attribute, IActionFilter
 {
-   // ...
-   public void ConfigureServices(IServiceCollection services)
-   {
-      services.AddScoped<GuidResponseAttribute>();  // GuidResponse's IsReusable set to false
-   }
-}
-/
+    private readonly IPersonService _personService;
+    private readonly ILogger<MySampleActionFilter> _logger;
 
-[GuidResponse]
-[GuidResponse]
-public class HomeController : Controller
+    public MySampleActionFilter(IPersonService personService, ILogger<MySampleActionFilter> logger)
+    {
+        _personService = personService;
+        _logger = logger;
+        _logger.LogInformation($"MySampleActionFilter.Ctor {DateTime.Now:yyyyMMddHHmmssffff}");
+    }
+
+    public void OnActionExecuted(ActionExecutedContext context)
+    {
+        Person personService = _personService.GetPerson(1);
+        _logger.LogInformation($"TraceId=[{context.HttpContext.TraceIdentifier}] MySampleActionFilter.OnActionExecuted ");
+    }
+
+    public void OnActionExecuting(ActionExecutingContext context)
+    {
+        _logger.LogInformation($"TraceId=[{context.HttpContext.TraceIdentifier}] MySampleActionFilter.OnActionExecuting ");
+    }
+}
+
+[Route("api/[controller]/[action]")]
+[ApiController]
+public class PersonController : ControllerBase
 {
-   public IActionResult Index() 
-   { 
-      // ... 
-   };
-   // ...
+    private readonly List<Person> _persons;
+    public PersonController()
+    {
+        _persons = new List<Person>
+        {
+            new Person{ Id=1,Name="Tom" },
+            new Person{ Id=2,Name="Jerry" },
+            new Person{ Id=3,Name="Spike" }
+        };
+    }
+
+    [HttpGet]
+    [TypeFilter(typeof(MySampleActionFilter))]
+    public List<Person> GetPersons()    // <-----------------OK, TypeFilter doesn't require MySampleActionFilter to be registered
+    {
+        return _persons;
+    }
+
+    [HttpGet]
+    [ServiceFilter(typeof(MySampleActionFilter))]
+    public List<Person> GetPersons2()   // System.InvalidOperationException: No service for type 'MySampleActionFilter' has been registered
+    {                                   // to make it work, add `services.AddScoped<MySampleActionFilter>()` below
+        return _persons;
+    }
 }
 
-/*
-(first request)
-Name	      Value
-Counter_0	fb308aa8-449b-4775-a0d5-53b33d35dbd4   
-Counter_1	fb308aa8-449b-4775-a0d5-53b33d35dbd4
-
-(second request)
-Name	Value
-Counter_0	937757b6-0829-42d3-8f8e-9367dcb588bf
-Counter_1	937757b6-0829-42d3-8f8e-9367dcb588bf
-*/
+public void ConfigureServices(IServiceCollection services)
+{
+    services.AddScoped<IPersonService,PersonService>();
+    services.AddControllers();
+}
 ```
+
 
 <style type="text/css">
 .markdown-body {

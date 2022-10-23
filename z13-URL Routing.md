@@ -177,8 +177,9 @@ public static class EndpointRoutingApplicationBuilderExtensions
       }
    }
 }
+
 //--------------------V
-internal sealed partial class EndpointRoutingMiddleware {   // <---------a3
+internal sealed partial class EndpointRoutingMiddleware {   // <-------------------a3
    private readonly MatcherFactory _matcherFactory;
    private readonly ILogger _logger;
    private readonly EndpointDataSource _endpointDataSource;
@@ -480,7 +481,9 @@ public sealed class DefaultEndpointDataSource : EndpointDataSource {
    public DefaultEndpointDataSource(IEnumerable<Endpoint> endpoints) {
       _endpoints = new List<Endpoint>(endpoints);
    }
-   // public override IChangeToken GetChangeToken() => NullChangeToken.Singleton;
+   
+   public override IChangeToken GetChangeToken() => NullChangeToken.Singleton;
+
    public override IReadOnlyList<Endpoint> Endpoints => _endpoints;
 }
 

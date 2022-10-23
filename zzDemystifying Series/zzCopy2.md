@@ -167,35 +167,46 @@ public static class MvcServiceCollectionExtensions
 }
 ```
 
-Part A - (denoted as `o`) Overall
+**Part A** - (denoted as `o`) Overall
 
-Part B - (denoted as `c`) How controller instances are created
+**Part B** - (denoted as `c`) How controller instances are created
 
-Part C - (denoted as `b` and `a`) How Model Binding Works + How Action method Executes
+**Part C** - (denoted as `b` and `a`) How Model Binding Works + How Action method Executes
 
-Part D - (denoted as `d`) How Filters information discovered
+**Part D** - (denoted as `d`) How Filters information discovered; d5.1 shows how Filter instance are created by compiler and wrapped into `ControllerModel`, which is further wrapped in `ApplicationModel`, then `ControllerActionDescriptorBuilder.Build(applicationModelInstance)` (d5.6)
 
-Part E - (denoted as `f`) How Filters get executed in pipeline
+**Part E** - (denoted as `f`) How Filters get executed in pipeline
 
+
+`ActionEndpointFactory`-
 
 ```C#
 public static class ControllerEndpointRouteBuilderExtensions 
 {
-   public static ControllerActionEndpointConventionBuilder MapControllers(this IEndpointRouteBuilder endpoints)  
+   public static ControllerActionEndpointConventionBuilder MapControllers(this IEndpointRouteBuilder endpointsBuilder)  
    {                                                                                                             
-      EnsureControllerServices(endpoints);
-      return GetOrCreateDataSource(endpoints).DefaultBuilder;
+      EnsureControllerServices(endpointsBuilder);
+      return GetOrCreateDataSource(endpointsBuilder).DefaultBuilder;
    }
 
-   private static ControllerActionEndpointDataSource GetOrCreateDataSource(IEndpointRouteBuilder endpoints)
+   public static ControllerActionEndpointConventionBuilder MapDefaultControllerRoute(this IEndpointRouteBuilder endpointsBuilder)
    {
-      var dataSource = endpoints.DataSources.OfType<ControllerActionEndpointDataSource>().FirstOrDefault();
+      EnsureControllerServices(endpointsBuilder);
+
+      var dataSource = GetOrCreateDataSource(endpointsBuilder);
+      
+      return dataSource.AddRoute("default", "{controller=Home}/{action=Index}/{id?}", defaults: null, constraints: null, dataTokens: null);
+   }
+
+   private static ControllerActionEndpointDataSource GetOrCreateDataSource(IEndpointRouteBuilder endpointsBuilder)
+   {
+      var dataSource = endpointsBuilder.DataSources.OfType<ControllerActionEndpointDataSource>().FirstOrDefault();
       if (dataSource == null) 
       {
-         var orderProvider = endpoints.ServiceProvider.GetRequiredService<OrderedEndpointsSequenceProviderCache>();
-         var factory = endpoints.ServiceProvider.GetRequiredService<ControllerActionEndpointDataSourceFactory>();    // <--------------------------- o1
-         dataSource = factory.Create(orderProvider.GetOrCreateOrderedEndpointsSequenceProvider(endpoints));
-         endpoints.DataSources.Add(dataSource);
+         var orderProvider = endpointsBuilder.ServiceProvider.GetRequiredService<OrderedEndpointsSequenceProviderCache>();
+         var factory = endpointsBuilder.ServiceProvider.GetRequiredService<ControllerActionEndpointDataSourceFactory>();    // <--------------------------- o1
+         dataSource = factory.Create(orderProvider.GetOrCreateOrderedEndpointsSequenceProvider(endpointsBuilder));          // <--------------------------- o2.a
+         endpointsBuilder.DataSources.Add(dataSource);      // <--------------------------- o4
       }
 
       return dataSource;
@@ -229,7 +240,7 @@ internal sealed class ControllerActionEndpointDataSourceFactory   // <----------
  
    public ControllerActionEndpointDataSource Create(OrderedEndpointsSequenceProvider orderProvider)
    {
-       return new ControllerActionEndpointDataSource(_dataSourceIdProvider, _actions, _factory, orderProvider);   // <--------------------------- o2
+       return new ControllerActionEndpointDataSource(_dataSourceIdProvider, _actions, _factory, orderProvider);   // <--------------------------- o2.b_
    }
 }
 //-------------------------------------------------------------Ʌ
@@ -338,10 +349,20 @@ internal sealed partial class DefaultActionDescriptorCollectionProvider : Action
       {
          _actionDescriptorProviders[i].OnProvidersExecuted(context);
       }
+      
+      var oldCancellationTokenSource = _cancellationTokenSource;
+
+      _collection = new ActionDescriptorCollection(new ReadOnlyCollection<ActionDescriptor>(context.Results), _version++);
+
       // ...
    }
 }
 //---------------------------------------------------------------------Ʌ
+
+public class ActionDescriptorProviderContext
+{
+   public IList<ActionDescriptor> Results { get; } = new List<ActionDescriptor>();
+}
 
 public interface IActionDescriptorProvider
 {
@@ -362,9 +383,9 @@ internal sealed class ControllerActionDescriptorProvider : IActionDescriptorProv
 
    public void OnProvidersExecuting(ActionDescriptorProviderContext context)
    {
-      foreach (var descriptor in GetDescriptors())
+      foreach (ControllerActionDescriptor descriptor in GetDescriptors())
       {
-         context.Results.Add(descriptor);
+         context.Results.Add(descriptor);    // <---------------------------------------
       }
    }
 
@@ -395,7 +416,7 @@ internal sealed class ControllerActionDescriptorProvider : IActionDescriptorProv
 
    internal IEnumerable<ControllerActionDescriptor> GetDescriptors()  // <---------------d3.2, use IApplicationModelProvider(DefaultApplicationModelProvider) to create filter
    {
-      var controllerTypes = GetControllerTypes();
+      IEnumerable<TypeInfo> controllerTypes = GetControllerTypes();
       var application = _applicationModelFactory.CreateApplicationModel(controllerTypes);   // <------------------------------d3.3+, d5.5
       return ControllerActionDescriptorBuilder.Build(application);    // <---------------------------d5.6+
    }
@@ -452,6 +473,19 @@ public class FilterItem   // associate executable filters with IFilterMetadata i
    public bool IsReusable { get; set; }
 }
 //---------------------Ʌ
+
+//-------------------------------------V
+public class ControllerActionDescriptor : ActionDescriptor
+{
+   public string ControllerName { get; set; } = default!;
+   public virtual string ActionName { get; set; } = default!;
+   public MethodInfo MethodInfo { get; set; } = default!;
+   public TypeInfo ControllerTypeInfo { get; set; } = default!;
+   internal EndpointFilterDelegate? FilterDelegate { get; set; }
+   internal ControllerActionInvokerCacheEntry? CacheEntry { get; set; }  // <---------------------
+   public override string? DisplayName { get; set; }
+}
+//-------------------------------------Ʌ
 
 //-----------------------------------------------------V
 internal static class ControllerActionDescriptorBuilder      // <---------------------------------d6
@@ -677,6 +711,13 @@ public class ControllerModel : ICommonModel, IFilterModel, IApiExplorerModel
 }
 //--------------------------------------------------------------------------Ʌ
 
+public interface IApplicationModelProvider
+{
+   int Order { get; }
+   void OnProvidersExecuting(ApplicationModelProviderContext context);
+   void OnProvidersExecuted(ApplicationModelProviderContext context);
+}
+
 //------------------------------------------------------------------------V
 internal class DefaultApplicationModelProvider : IApplicationModelProvider    // <---------------------------------d5
 {
@@ -709,6 +750,7 @@ internal class DefaultApplicationModelProvider : IApplicationModelProvider    //
          if (controllerModel == null)
             continue;
          
+         // context.Result is ApplicationModel, its Controllers property is IList<ControllerModel>
          context.Result.Controllers.Add(controllerModel);               // <--------------------------------------------d5.4
          controllerModel.Application = context.Result;
 
@@ -944,6 +986,7 @@ public class ActionDescriptorCollection
    }
 
    public IReadOnlyList<ActionDescriptor> Items { get; }
+   
    public int Version { get; }
 }
 //-------------------------------------Ʌ
@@ -967,7 +1010,7 @@ public class Endpoint  // represents a logical endpoint in an application
 
    public string? DisplayName { get; }
 
-   public EndpointMetadataCollection Metadata { get; }
+   public EndpointMetadataCollection Metadata { get; }  // <--------contains ActionDescriptor, refer to r1
 
    public RequestDelegate? RequestDelegate { get; }
 
@@ -980,7 +1023,10 @@ public abstract class EndpointDataSource   // provides a collection of Endpoint 
 {
    public abstract IChangeToken GetChangeToken();
 
-   public abstract IReadOnlyList<Endpoint> Endpoints { get; }
+   public abstract IReadOnlyList<Endpoint> Endpoints { get; }   // <--------!important,  eventually get called via DataSourceDependentMatcher -> DataSourceDependentCache<Matcher>
+                                                                // (DataSourceDependentMatcher.cs,23), Endpoint/ActionDescription info will be generated first request  
+                                                                //  via EndpointRoutingMiddleware, then all will be cached
+
 
    public virtual IReadOnlyList<Endpoint> GetGroupedEndpoints(RouteGroupContext context)
    {
@@ -1038,7 +1084,7 @@ internal abstract class ActionEndpointDataSourceBase : EndpointDataSource, IDisp
    protected readonly List<Action<EndpointBuilder>> Conventions;
    protected readonly List<Action<EndpointBuilder>> FinallyConventions;
 
-   private List<Endpoint>? _endpoints;
+   private List<Endpoint>? _endpoints;      // <-----------------------------------------------that's why it is EndpointDataSource
    private CancellationTokenSource? _cancellationTokenSource;
    private IChangeToken? _changeToken;
    private IDisposable? _disposable;
@@ -1051,7 +1097,7 @@ internal abstract class ActionEndpointDataSourceBase : EndpointDataSource, IDisp
       FinallyConventions = new List<Action<EndpointBuilder>>();
    }
 
-   public override IReadOnlyList<Endpoint> Endpoints
+   public override IReadOnlyList<Endpoint> Endpoints 
    {
       get {
          Initialize();
@@ -1059,7 +1105,7 @@ internal abstract class ActionEndpointDataSourceBase : EndpointDataSource, IDisp
       }
    }
 
-   public override IReadOnlyList<Endpoint> GetGroupedEndpoints(RouteGroupContext context)
+   public override IReadOnlyList<Endpoint> GetGroupedEndpoints(RouteGroupContext context)  
    {
       return CreateEndpoints(
          context.Prefix,
@@ -1110,7 +1156,7 @@ internal abstract class ActionEndpointDataSourceBase : EndpointDataSource, IDisp
          var oldCancellationTokenSource = _cancellationTokenSource;
  
          // step 2 - update endpoints
-         _endpoints = endpoints;
+         _endpoints = endpoints;      // <--------------------------------at this point EndpointDataSource has all the Endpoint
  
          // step 3 - create new change token
          _cancellationTokenSource = new CancellationTokenSource();
@@ -1124,8 +1170,8 @@ internal abstract class ActionEndpointDataSourceBase : EndpointDataSource, IDisp
 //--------------------------------------------------Ʌ
 
 //-------------------------------------------------------------------------------------V
-internal sealed class ControllerActionEndpointDataSource : ActionEndpointDataSourceBase     // <--------------------------------o2
-{                                                                                       // <----------d1, ActionEndpointDataSourceBase contains IActionDescriptorCollectionProvider
+internal sealed class ControllerActionEndpointDataSource : ActionEndpointDataSourceBase     // <--------------------------------o3
+{                                                                                           // <----d1, ActionEndpointDataSourceBase contains IActionDescriptorCollectionProvider
    private readonly ActionEndpointFactory _endpointFactory;
    private readonly OrderedEndpointsSequenceProvider _orderSequence;
    private readonly List<ConventionalRouteEntry> _routes;
@@ -1237,7 +1283,7 @@ internal sealed class ActionEndpointFactory
 
    public ActionEndpointFactory(RoutePatternTransformer routePatternTransformer, IEnumerable<IRequestDelegateFactory> requestDelegateFactories, IServiceProvider serviceProvider);
 
-   public void AddEndpoints(
+   public void AddEndpoints(       // <-----------------!important, to add requestDelegate to endpoints
       List<Endpoint> endpoints,
       HashSet<string> routeNames,
       ActionDescriptor action,
@@ -1257,21 +1303,15 @@ internal sealed class ActionEndpointFactory
             RequestDelegate = _requestDelegate,
          };
 
-         AddActionDataToBuilder(
-            builder,
-            routeNames,
-            action,
-            routeName: null,
-            dataTokens: null,
-            suppressLinkGeneration: false,
-            suppressPathMatching: false,
+         AddActionDataToBuilder(builder, routeNames, action, routeName: null, dataTokens: null, suppressLinkGeneration: false, suppressPathMatching: false,
             groupConventions: groupConventions,
             conventions: conventions,
             perRouteConventions: Array.Empty<Action<EndpointBuilder>>(),
             groupFinallyConventions: groupFinallyConventions,
             finallyConventions: finallyConventions,
             perRouteFinallyConventions: Array.Empty<Action<EndpointBuilder>>());
-            endpoints.Add(builder.Build());
+
+         endpoints.Add(builder.Build());    // <---------------------------------
       }
 
       if (action.AttributeRouteInfo?.Template == null)
@@ -1291,7 +1331,7 @@ internal sealed class ActionEndpointFactory
 
             var requestDelegate = CreateRequestDelegate(action, route.DataTokens) ?? _requestDelegate;  // <-------------------------------
 
-            var builder = new RouteEndpointBuilder(requestDelegate, updatedRoutePattern, route.Order)
+            var builder = new RouteEndpointBuilder(requestDelegate, updatedRoutePattern, route.Order)   // requestDelegate is the same for every Endpoint
             {
                DisplayName = action.DisplayName,
             };
@@ -1360,20 +1400,21 @@ internal sealed class ActionEndpointFactory
       return null;
    }
 
-   private static RequestDelegate CreateRequestDelegate()  // <---------------------------------------
+   private static RequestDelegate CreateRequestDelegate()  // <-----------------
    {
       IActionInvokerFactory invokerFactory = null;
 
-      return (context) =>
+      return (context) =>    // <----this is the same RequestDelegate that attached to every Endpoint, so IActionInvoker etc will only invoke during the runtime of each request
       {
-         var endpoint = context.GetEndpoint()!;     // <------------------------------EndpointRoutingMiddleware sets the Endpoint
+         var endpoint = context.GetEndpoint()!;   // the purpose is to get ActionDescriptor that is associated with the Endpoint
          var dataTokens = endpoint.Metadata.GetMetadata<IDataTokensMetadata>();
  
          var routeData = new RouteData();
          routeData.PushState(router: null, context.Request.RouteValues, new RouteValueDictionary(dataTokens?.DataTokens));
  
-         var action = endpoint.Metadata.GetMetadata<ActionDescriptor>()!;
-         var actionContext = new ActionContext(context, routeData, action);
+         var action = endpoint.Metadata.GetMetadata<ActionDescriptor>()!;     // r1
+
+         var actionContext = new ActionContext(context, routeData, action);   // <-----------------------------------------------------create an instance of ActionContext
  
          if (invokerFactory == null)
          {
@@ -1386,6 +1427,15 @@ internal sealed class ActionEndpointFactory
          return invoker.InvokeAsync();                                // <----------------------------------------------------f1.4, f2.4c_
       };                                                              
    }
+   //
+   private sealed class InertEndpointBuilder : EndpointBuilder
+   {
+      public override Endpoint Build()
+      {
+         return new Endpoint(RequestDelegate, new EndpointMetadataCollection(Metadata), DisplayName);
+      }
+   }
+   //
 }
 //-----------------------------------------Ʌ
 
@@ -1409,6 +1459,7 @@ internal sealed class ActionInvokerFactory : IActionInvokerFactory      // <----
 {
    private readonly IActionInvokerProvider[] _actionInvokerProviders;   // <----------------------------f1.1
                                                                         // rely on ControllerActionInvokerProvider to set IActionInvoker to ActionInvokerProviderContext
+                                                                        // ControllerActionInvokerProvider creates an instance of ControllerContext
 
    public ActionInvokerFactory(IEnumerable<IActionInvokerProvider> actionInvokerProviders)
    {
@@ -1451,7 +1502,8 @@ internal sealed class TypeActivatorCache : ITypeActivatorCache
 
    public TInstance CreateInstance<TInstance>(IServiceProvider serviceProvider, Type implementationType)
    {
-      var createFactory = _typeActivatorCache.GetOrAdd(implementationType, _createFactory);   // <---------------------------c7<
+      // public delegate object ObjectFactory(IServiceProvider serviceProvider, object?[]? arguments);
+      ObjectFactory createFactory = _typeActivatorCache.GetOrAdd(implementationType, _createFactory);   // <---------------------------c7<
       return (TInstance)createFactory(serviceProvider, arguments: null);
    }
 }
@@ -1509,6 +1561,7 @@ internal sealed class DefaultControllerActivator : IControllerActivator
       Release(context, controller);
       return default;
    }
+}
 //----------------------------------------------ɅɅ
 
 //----------------------------------------------VV
@@ -1538,7 +1591,7 @@ internal sealed class DefaultControllerFactory : IControllerFactory
 
    public object CreateController(ControllerContext context)
    {
-      var controller = _controllerActivator.Create(context);
+      var controller = _controllerActivator.Create(context);   // <-------------------------
       foreach (var propertyActivator in _propertyActivators)
       {
          propertyActivator.Activate(context, controller);
@@ -1602,12 +1655,14 @@ internal sealed class ControllerFactoryProvider : IControllerFactoryProvider
          return _factoryCreateController;
       }
 
-      var controllerActivator = _activatorProvider.CreateActivator(descriptor);   // <--------------------c4<
-      var propertyActivators = GetPropertiesToActivate(descriptor);
+      Func<ControllerContext, object> controllerActivator = _activatorProvider.CreateActivator(descriptor);   // <--------------------c4<
+      Action<ControllerContext, object>[] propertyActivators = GetPropertiesToActivate(descriptor);
 
-      object CreateController(ControllerContext controllerContext)
+      // this is like a delegate consists of two delegates (inner and outter)
+      // inner one (controllerActivator) is the real one that create an instance of the controller 
+      object CreateController(ControllerContext controllerContext)   // <------------- this delegate is called in ControllerInvoker
       {
-         var controller = controllerActivator(controllerContext);
+         var controller = controllerActivator(controllerContext);    // <------------- this is when an instance of controller is created
          for (var i = 0; i < propertyActivators.Length; i++)
          {
             var propertyActivator = propertyActivators[i];
@@ -1688,7 +1743,7 @@ public class ControllerActivatorProvider : IControllerActivatorProvider
    private static readonly Action<ControllerContext, object> _dispose = Dispose;
    private static readonly Func<ControllerContext, object, ValueTask> _disposeAsync = DisposeAsync;
    private static readonly Func<ControllerContext, object, ValueTask> _syncDisposeAsync = SyncDisposeAsync;
-   private readonly Func<ControllerContext, object>? _controllerActivatorCreate;
+   private readonly Func<ControllerContext, object>? _controllerActivatorCreate;   // <---------------------
    private readonly Action<ControllerContext, object>? _controllerActivatorRelease;
    private readonly Func<ControllerContext, object, ValueTask>? _controllerActivatorReleaseAsync;
 
@@ -1921,14 +1976,14 @@ internal sealed class DefaultFilterProvider : IFilterProvider   // DefaultFilter
 
       if (filter is not IFilterFactory filterFactory)                       // <--------------------f5.1
       {
-         filterItem.Filter = filter;     // assign compiler-created Filter instance to FilterItem, note that compiler created Filter instances exist both in ControllerModel
-                                         // and FilterDescriptor, so the purpose of FilterItem is to "move" Filter instance from FilterDescriptor to itself as a wrapper
+         filterItem.Filter = filter;     // <------------need to check carefully. related to caching
+
          filterItem.IsReusable = true;   // that's why default Filters are resusable
       }
       else
-      {                                                                     // <--------------------f5.1
+      {                                                                     
          var services = context.ActionContext.HttpContext.RequestServices;
-         filterItem.Filter = filterFactory.CreateInstance(services);
+         filterItem.Filter = filterFactory.CreateInstance(services);        // <--------------------!important f5.1
          filterItem.IsReusable = filterFactory.IsReusable;
 
          if (filterItem.Filter == null)
@@ -1951,6 +2006,19 @@ internal sealed class DefaultFilterProvider : IFilterProvider   // DefaultFilter
    */
 }
 //-----------------------------------------Ʌ
+
+internal readonly struct FilterFactoryResult
+{
+   public FilterFactoryResult(FilterItem[] cacheableFilters, IFilterMetadata[] filters)
+   {
+      CacheableFilters = cacheableFilters;
+      Filters = filters;
+   }
+
+   public FilterItem[] CacheableFilters { get; }
+
+   public IFilterMetadata[] Filters { get; }
+}
 
 //---------------------------------V
 internal static class FilterFactory       // <------------------------------------f4
@@ -2076,6 +2144,13 @@ public class ActionInvokerProviderContext
 }
 //---------------------------------------Ʌ
 
+public interface IActionInvokerProvider
+{
+   int Order { get; }
+   void OnProvidersExecuting(ActionInvokerProviderContext context);
+   void OnProvidersExecuted(ActionInvokerProviderContext context);
+}
+
 //----------------------------------------------------------------------------V
 internal sealed class ControllerActionInvokerProvider : IActionInvokerProvider      // <------------------------- f2
 {
@@ -2110,7 +2185,7 @@ internal sealed class ControllerActionInvokerProvider : IActionInvokerProvider  
    {
       if (context.ActionContext.ActionDescriptor is ControllerActionDescriptor)
       {
-         var controllerContext = new ControllerContext(context.ActionContext)   // <-------------------- create ControllerContext instance
+         var controllerContext = new ControllerContext(context.ActionContext)   // <----------------------------------------! create ControllerContext instance 
          {
             ValueProviderFactories = new CopyOnWriteList<IValueProviderFactory>(_valueProviderFactories)
          };
@@ -2295,11 +2370,6 @@ internal abstract partial class ResourceInvoker                    // <---------
       }
    }
 
-   protected virtual Task InvokeResultAsync(IActionResult result)
-   {
-      return result.ExecuteResultAsync(_actionContext);
-   }
-
    protected abstract Task InvokeInnerFilterAsync();   // override by ControllerActionInvoker
 
    private Task Next(ref State next, ref Scope scope, ref object? state, ref bool isCompleted)
@@ -2421,7 +2491,7 @@ internal abstract partial class ResourceInvoker                    // <---------
             if (!task.IsCompletedSuccessfully)
             {
                next = State.ResourceAsyncEnd;
-               eturn task;
+               return task;
             }
 
             goto case State.ResourceAsyncEnd;
@@ -2692,6 +2762,129 @@ internal abstract partial class ResourceInvoker                    // <---------
       }
    }
 
+   private Task ResultNext<TFilter, TFilterAsync>(ref State next, ref Scope scope, ref object? state, ref bool isCompleted)
+   {
+      var resultFilterKind = typeof(TFilter) == typeof(IAlwaysRunResultFilter) ? FilterTypeConstants.AlwaysRunResultFilter : FilterTypeConstants.ResultFilter;
+
+      switch (next)
+      {
+         case State.ResultBegin:
+            _cursor.Reset();
+            goto case State.ResultNext;
+
+         case State.ResultNext:
+            var current = _cursor.GetNextFilter<TFilter, TFilterAsync>();
+            if (current.FilterAsync != null)
+            {
+               if (_resultExecutingContext == null)
+               {
+                  _resultExecutingContext = new ResultExecutingContextSealed(_actionContext, _filters, _result!, _instance!);
+               }
+
+               state = current.FilterAsync;
+               goto case State.ResultAsyncBegin;
+            }
+            else if (current.Filter != null)
+            {
+               if (_resultExecutingContext == null)
+               {
+                  _resultExecutingContext = new ResultExecutingContextSealed(_actionContext, _filters, _result!, _instance!);
+               }
+
+               state = current.Filter;
+               goto case State.ResultSyncBegin;
+            }
+            else
+            {
+               goto case State.ResultInside;
+            }
+         
+         /* 
+         case State.ResultAsyncBegin: 
+            ...
+         case State.ResultAsyncEnd:
+            ...
+         */
+
+         case State.ResultSyncBegin:
+            var filter = (TFilter)state;
+            var resultExecutingContext = _resultExecutingContext;
+
+            filter.OnResultExecuting(resultExecutingContext);
+
+            if (_resultExecutingContext.Cancel)
+            {
+               _resultExecutedContext = new ResultExecutedContextSealed(resultExecutingContext, _filters, resultExecutingContext.Result,_instance!) { Canceled = true};
+
+               goto case State.ResultEnd;
+            }
+
+            var task = InvokeNextResultFilterAsync<TFilter, TFilterAsync>();
+            if (!task.IsCompletedSuccessfully)
+            {
+               next = State.ResultSyncEnd;
+               return task;
+            }
+
+            goto case State.ResultSyncEnd;
+         
+         case State.ResultSyncEnd:
+            var filter = (TFilter)state;
+            var resultExecutedContext = _resultExecutedContext;
+
+            filter.OnResultExecuted(resultExecutedContext);
+
+            goto case State.ResultEnd;
+
+         case State.ResultInside:
+            // if we executed result filters then we need to grab the result from there
+            if (_resultExecutingContext != null)
+            {
+               _result = _resultExecutingContext.Result;
+            }
+
+            if (_result == null)
+            {
+               // the empty result is always flowed back as the 'executed' result if we don't have one
+               _result = new EmptyResult();
+            }
+
+            var task = InvokeResultAsync(_result);
+            if (!task.IsCompletedSuccessfully)
+            {
+               next = State.ResultEnd;
+               return task;
+            }
+
+            goto case State.ResultEnd;
+         
+         case State.ResultEnd:
+            var result = _result;
+            isCompleted = true;
+
+            if (scope == Scope.Result)
+            {
+               if (_resultExecutedContext == null)
+               {
+                  _resultExecutedContext = new ResultExecutedContextSealed(_actionContext, _filters, result!, _instance!);
+               }
+
+               return Task.CompletedTask;
+            }
+
+            Rethrow(_resultExecutedContext!);
+            return Task.CompletedTask;
+
+         default:
+            throw new InvalidOperationException();  // unreachable
+      }
+   }
+
+   protected virtual Task InvokeResultAsync(IActionResult result)
+   {
+      return result.ExecuteResultAsync(_actionContext);    // <-------------------!important, that is how IActionResult get executed; refer to IActionResult flow
+   }                                         
+
    private Task InvokeNextExceptionFilterAsync()
    {
       try
@@ -2865,11 +3058,12 @@ internal partial class ControllerActionInvoker : ResourceInvoker, IActionInvoker
    {
       switch (next)
       {
-         case State.ActionBegin:
+         case State.ActionBegin:    // <------------------------------ ControllerActionInvoker only starts with ActionBegin while ResourceInvoker starts with AuthorizationBegin
             var controllerContext = _controllerContext;
             _cursor.Reset();
 
             _instance = _cacheEntry.ControllerFactory(controllerContext);   // <-------------------------------c1<, a3, create an instance of Controller
+                                                                            // !important, now you see when an instance of controller is created
 
             _arguments = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
 
@@ -2975,7 +3169,7 @@ internal partial class ControllerActionInvoker : ResourceInvoker, IActionInvoker
             goto case State.ActionEnd;
          
          case State.ActionInside:
-            var task = InvokeActionMethodAsync();   // <-------------------importantdfdfd
+            var task = InvokeActionMethodAsync();   // <-------------------important
             if (task.Status != TaskStatus.RanToCompletion)
             {
                next = State.ActionEnd;

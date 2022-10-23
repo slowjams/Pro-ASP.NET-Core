@@ -562,6 +562,15 @@ public static class ActivatorUtilities  // Activator.CreateInstance + IServicePr
 // and you can't mix them like provide some arguments manually and let IServiceProvider search the rest of arguments (not that smart)
 ```
 
+an example to use `ActivatorUtilities.CreateFactory()` :
+
+```C#
+public delegate object ObjectFactory(IServiceProvider serviceProvider, object?[]? arguments);
+
+ObjectFactory PersonFactory = ActivatorUtilities.CreateFactory(typeof(Person), new Type[] { typeof(string) });
+Person natashaFromHr = PersonFactory.Invoke(serviceProvider, new object[] { "John" }) as Person;;
+```
+
 There are two important things to notice:
 
 1. Both `ServiceProvider` and `ServiceProviderEngineScope` implement `IServiceProvider`:
@@ -627,7 +636,7 @@ MS.DI this two-step process:
 
 MS.DI's ServiceCollection is the equivalent of Autofac's ContainerBuilder
 
-## Resolving objects
+## Resolving Objects
 
 ```C#
 var services = new ServiceCollection();    // 1
@@ -884,12 +893,14 @@ public ThreeCourseMeal(ICourse entrée, ICourse mainCourse, ICourse dessert)
 In this case, you have three identically typed Dependencies, each of which represents a different concept. In most cases, you want to map each of the Dependencies to aseparate type.
 
 As stated previously, when compared to Autofac, MS.DI is limited in functionality. Where Autofac provides keyed registrations, MS.DI falls short in this respect. There isn’t any built-in functionality to do this. To wire up such an ambiguous API with MS.DI, you have to revert to using a code block:
+
 ```C#
 services.AddTransient<IMeal>(sp => new ThreeCourseMeal(
    entrée: sp.GetRequiredService<Rillettes>(),
    mainCourse: sp.GetRequiredService<CordonBleu>(),
    dessert: sp.GetRequiredService<CrèmeBrûlée>()));
 ```
+
 MS.DI contains a utility class called `ActivatorUtilities` (that use System.Reflection.ConstructorInfo's Invoke instance method internally) that allows Auto-Wiring a class's Dependencies:
 ```C#
 public static class ActivatorUtilities {
