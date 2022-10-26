@@ -3169,7 +3169,7 @@ internal partial class ControllerActionInvoker : ResourceInvoker, IActionInvoker
             goto case State.ActionEnd;
          
          case State.ActionInside:
-            var task = InvokeActionMethodAsync();   // <-------------------important
+            var task = InvokeActionMethodAsync();   // <-----------------------------important!, invoke action method
             if (task.Status != TaskStatus.RanToCompletion)
             {
                next = State.ActionEnd;
@@ -3487,7 +3487,94 @@ internal abstract class ActionMethodExecutor
 //------------------------------------------Ʌ
 ```
 
+
+
+## Model Binding
+
 ```C#
+//----------------------------------------------V
+public abstract class ModelBinderProviderContext
+{
+   public abstract IModelBinder CreateBinder(ModelMetadata metadata);
+
+   public virtual IModelBinder CreateBinder(ModelMetadata metadata, BindingInfo bindingInfo)
+   {
+      throw new NotSupportedException();
+   }
+
+   public abstract BindingInfo BindingInfo { get; }
+
+   public abstract ModelMetadata Metadata { get; }
+
+   public abstract IModelMetadataProvider MetadataProvider { get; }
+
+   public virtual IServiceProvider Services { get; } = default!;
+}
+//----------------------------------------------Ʌ
+
+//----------------------------------------------------V
+private sealed class DefaultModelBinderProviderContext : ModelBinderProviderContext
+{
+   private readonly ModelBinderFactory _factory;
+
+   public DefaultModelBinderProviderContext(ModelBinderFactory factory, ModelBinderFactoryContext factoryContext)
+   {
+      _factory = factory;
+      Metadata = factoryContext.Metadata;
+      BindingInfo bindingInfo;
+      if (factoryContext.BindingInfo != null)
+      {
+         bindingInfo = new BindingInfo(factoryContext.BindingInfo);
+      }
+      else
+      {
+         bindingInfo = new BindingInfo();
+      }
+ 
+      bindingInfo.TryApplyBindingInfo(Metadata);
+      BindingInfo = bindingInfo;
+ 
+      MetadataProvider = _factory._metadataProvider;
+      Visited = new Dictionary<Key, IModelBinder?>();
+   }
+
+   private DefaultModelBinderProviderContext(DefaultModelBinderProviderContext parent, ModelMetadata metadata, BindingInfo bindingInfo)
+   {
+      Metadata = metadata;
+      _factory = parent._factory;
+      MetadataProvider = parent.MetadataProvider;
+      Visited = parent.Visited;
+      BindingInfo = bindingInfo;
+   }
+
+   public override BindingInfo BindingInfo { get; }
+
+   public override ModelMetadata Metadata { get; }
+
+   public override IModelMetadataProvider MetadataProvider { get; }
+
+   public Dictionary<Key, IModelBinder?> Visited { get; }
+
+   public override IServiceProvider Services => _factory._serviceProvider;
+
+   public override IModelBinder CreateBinder(ModelMetadata metadata)
+   {
+      var bindingInfo = new BindingInfo();
+      bindingInfo.TryApplyBindingInfo(metadata);
+
+      return CreateBinder(metadata, bindingInfo);
+   }
+
+   public override IModelBinder CreateBinder(ModelMetadata metadata, BindingInfo bindingInfo)
+   {
+      var token = metadata;
+
+      var nestedContext = new DefaultModelBinderProviderContext(this, metadata, bindingInfo);
+      return _factory.CreateBinderCoreCached(nestedContext, token);
+   }
+}
+//----------------------------------------------------Ʌ
+
 //----------------------------------------------------V
 internal static class ControllerBinderDelegateProvider       
 {
@@ -3785,6 +3872,7 @@ public abstract class ModelMetadata : IEquatable<ModelMetadata?>, IModelMetadata
    public abstract string? DisplayName { get; }
 
    public abstract bool IsRequired { get; }
+
    // ...
 }
 //---------------------------------Ʌ
@@ -4053,112 +4141,6 @@ public partial class ModelBinderFactory : IModelBinderFactory
  
       return _cache.TryGetValue(new Key(metadata, cacheToken), out binder);
    }
-
-   private sealed class DefaultModelBinderProviderContext : ModelBinderProviderContext
-   {
-      private readonly ModelBinderFactory _factory;
-
-      public DefaultModelBinderProviderContext(ModelBinderFactory factory, ModelBinderFactoryContext factoryContext)
-      {
-         _factory = factory;
-         Metadata = factoryContext.Metadata;
-         BindingInfo bindingInfo;
-         if (factoryContext.BindingInfo != null)
-         {
-            bindingInfo = new BindingInfo(factoryContext.BindingInfo);
-         }
-         else
-         {
-            bindingInfo = new BindingInfo();
-         }
- 
-         bindingInfo.TryApplyBindingInfo(Metadata);
-         BindingInfo = bindingInfo;
- 
-         MetadataProvider = _factory._metadataProvider;
-         Visited = new Dictionary<Key, IModelBinder?>();
-      }
-
-      private DefaultModelBinderProviderContext(DefaultModelBinderProviderContext parent, ModelMetadata metadata, BindingInfo bindingInfo)
-      {
-         Metadata = metadata;
- 
-         _factory = parent._factory;
-         MetadataProvider = parent.MetadataProvider;
-         Visited = parent.Visited;
-         BindingInfo = bindingInfo;
-      }
-
-      public override BindingInfo BindingInfo { get; }
- 
-      public override ModelMetadata Metadata { get; }
- 
-      public override IModelMetadataProvider MetadataProvider { get; }
- 
-      public Dictionary<Key, IModelBinder?> Visited { get; }
-
-      public override IServiceProvider Services => _factory._serviceProvider;
-
-      public override IModelBinder CreateBinder(ModelMetadata metadata)
-      {
-         var bindingInfo = new BindingInfo();
-         bindingInfo.TryApplyBindingInfo(metadata);
- 
-         return CreateBinder(metadata, bindingInfo);
-      }
-
-      public override IModelBinder CreateBinder(ModelMetadata metadata, BindingInfo bindingInfo)
-      {
-          // for non-root nodes we use the ModelMetadata as the cache token. This ensures that all non-root nodes with the same metadata will have the same binder. This is OK
-          // because for an non-root node there's no opportunity to customize binding info like there is for a parameter.
-         var token = metadata;
- 
-         var nestedContext = new DefaultModelBinderProviderContext(this, metadata, bindingInfo);
-         return _factory.CreateBinderCoreCached(nestedContext, token);
-      }
-
-      private readonly struct Key : IEquatable<Key>
-      {
-         private readonly ModelMetadata _metadata;
-         private readonly object? _token; // Explicitly using ReferenceEquality for tokens.
- 
-         public Key(ModelMetadata metadata, object? token)
-         {
-            _metadata = metadata;
-            _token = token;
-         }
- 
-         public bool Equals(Key other)
-         {
-            return _metadata.Equals(other._metadata) && object.ReferenceEquals(_token, other._token);
-         }
- 
-         public override bool Equals(object? obj)
-         {
-            return obj is Key other && Equals(other);
-         }
- 
-         public override int GetHashCode()
-         {
-            return HashCode.Combine(_metadata, RuntimeHelpers.GetHashCode(_token));
-         }
- 
-         public override string ToString()
-         {
-            switch (_metadata.MetadataKind)
-            {
-               case ModelMetadataKind.Parameter:
-                  return $"{_token} (Parameter: '{_metadata.ParameterName}' Type: '{_metadata.ModelType.Name}')";
-               case ModelMetadataKind.Property:
-                  return $"{_token} (Property: '{_metadata.ContainerType!.Name}.{_metadata.PropertyName}' " + $"Type: '{_metadata.ModelType.Name}')";
-               case ModelMetadataKind.Type:
-                  return $"{_token} (Type: '{_metadata.ModelType.Name}')";
-               default:
-                  return $"Unsupported MetadataKind '{_metadata.MetadataKind}'.";
-            }
-         }
-      }
-   }
 }
 //-------------------------------------Ʌ
 
@@ -4168,6 +4150,16 @@ public interface IValueProvider
 {
    bool ContainsPrefix(string prefix);
    ValueProviderResult GetValue(string key);
+}
+
+public interface IEnumerableValueProvider : IValueProvider
+{
+   IDictionary<string, string> GetKeysFromPrefix(string prefix);
+}
+
+public interface IBindingSourceValueProvider : IValueProvider
+{
+   IValueProvider? Filter(BindingSource bindingSource);
 }
 
 // >
@@ -5625,6 +5617,14 @@ public partial class ParameterBinder
 }
 //----------------------------------Ʌ
 ```
+
+Goals:
+
+1. read source code of Produces and Consumes attributes
+2. Create custom binder
+
+
+
 
 <style type="text/css">
 .markdown-body {

@@ -378,7 +378,309 @@ public class ControllerActionInvoker : IActionInvoker
 }
 ```
 
+
+
 ## Source Code
+
+```C#
+//---------------------------V
+public class ActionDescriptor
+{
+   public ActionDescriptor()
+   {
+      Id = Guid.NewGuid().ToString();
+      Properties = new Dictionary<object, object>();
+      RouteValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);   
+   }
+
+   public string Id { get; }
+
+   public IDictionary<string, string> RouteValues { get; set; }
+
+   public AttributeRouteInfo? AttributeRouteInfo { get; set; }
+
+   public IList<IActionConstraintMetadata>? ActionConstraints { get; set; }
+
+   public IList<object> EndpointMetadata { get; set; } = Array.Empty<ParameterDescriptor>();
+
+   public IList<ParameterDescriptor> Parameters { get; set; } = Array.Empty<ParameterDescriptor>();       // <-------------------
+
+   public IList<ParameterDescriptor> BoundProperties { get; set; } = Array.Empty<ParameterDescriptor>();  // <-------------------
+
+   public IList<FilterDescriptor> FilterDescriptors { get; set; } = Array.Empty<FilterDescriptor>();   
+
+   public virtual string? DisplayName { get; set; }
+
+   public IDictionary<object, object?> Properties { get; set; } = default!;
+
+   internal IFilterMetadata[]? CachedReusableFilters { get; set; }   
+}
+//---------------------------Ʌ
+
+//------------------------------V
+public class ParameterDescriptor
+{
+   public string Name { get; set; } = default!;
+   public Type ParameterType { get; set; } = default!;
+   public BindingInfo? BindingInfo { get; set; }
+}
+//------------------------------Ʌ
+
+public interface IBindingSourceMetadata
+{
+   BindingSource? BindingSource { get; }
+}
+
+//-----------------------------------------------------V
+public class BindingSource : IEquatable<BindingSource?>
+{
+   public static readonly BindingSource Body = new BindingSource("Body", Resources.BindingSource_Body, isGreedy: true, isFromRequest: true);
+   public static readonly BindingSource Custom = new BindingSource("Custom", Resources.BindingSource_Custom, isGreedy: true, isFromRequest: true);
+   public static readonly BindingSource Form = new BindingSource("Form", Resources.BindingSource_Form, isGreedy: false, isFromRequest: true);
+   public static readonly BindingSource Header = new BindingSource("Header", Resources.BindingSource_Header, isGreedy: true, isFromRequest: true);
+   public static readonly BindingSource ModelBinding = new BindingSource("ModelBinding", Resources.BindingSource_ModelBinding, isGreedy: false, isFromRequest: true);
+   public static readonly BindingSource Path = new BindingSource("Path", Resources.BindingSource_Path, isGreedy: false, isFromRequest: true);
+   public static readonly BindingSource Query = new BindingSource("Query", Resources.BindingSource_Query, isGreedy: false, isFromRequest: true);
+   public static readonly BindingSource Services = new BindingSource("Services", Resources.BindingSource_Services, isGreedy: true, isFromRequest: false);
+   public static readonly BindingSource Special = new BindingSource("Special", Resources.BindingSource_Special, isGreedy: true, isFromRequest: false);
+   public static readonly BindingSource FormFile = new BindingSource("FormFile", Resources.BindingSource_FormFile, isGreedy: true, isFromRequest: true);
+
+   public BindingSource(string id, string displayName, bool isGreedy, bool isFromRequest)
+   {
+      Id = id;
+      DisplayName = displayName;
+      IsGreedy = isGreedy;
+      IsFromRequest = isFromRequest;
+   }
+
+   public string DisplayName { get; }
+   public string Id { get; }
+   public bool IsGreedy { get; }
+   public bool IsFromRequest { get; }
+
+   public virtual bool CanAcceptDataFrom(BindingSource bindingSource)
+   {
+      if (bindingSource is CompositeBindingSource)
+         throw new ArgumentException(message, nameof(bindingSource));
+
+      if (this == bindingSource)
+         return true;
+
+      if (this == ModelBinding)
+         return bindingSource == Form || bindingSource == Path || bindingSource == Query;
+      
+      return false;
+   }
+
+   public bool Equals(BindingSource? other) => return string.Equals(other?.Id, Id, StringComparison.Ordinal);
+
+   public override bool Equals(object? obj) => Equals(obj as BindingSource);
+  
+   // ...
+}
+//-----------------------------------------------------Ʌ
+
+//------------------------------V
+public class BindingInfo
+{
+   private Type? _binderType;
+
+   public BindingInfo() { }
+
+   public BindingInfo(BindingInfo other)
+   {
+      BindingSource = other.BindingSource;
+      BinderModelName = other.BinderModelName;
+      BinderType = other.BinderType;
+      PropertyFilterProvider = other.PropertyFilterProvider;
+      RequestPredicate = other.RequestPredicate;
+      EmptyBodyBehavior = other.EmptyBodyBehavior;
+   }
+
+   public BindingSource? BindingSource { get; set; }
+
+   public string? BinderModelName { get; set; }
+
+   public Type? BinderType
+   {
+      get => _binderType;
+      set
+      {
+         if (value != null && !typeof(IModelBinder).IsAssignableFrom(value))
+         {
+            throw new ArgumentException(...);
+         }
+ 
+         _binderType = value;
+      }
+   }
+
+   public IPropertyFilterProvider? PropertyFilterProvider { get; set; }
+
+   public Func<ActionContext, bool>? RequestPredicate { get; set; }
+
+   public EmptyBodyBehavior EmptyBodyBehavior { get; set; }
+
+   public static BindingInfo? GetBindingInfo(IEnumerable<object> attributes)
+   {
+      var bindingInfo = new BindingInfo();
+      var isBindingInfoPresent = false;
+ 
+      // BinderModelName
+      foreach (var binderModelNameAttribute in attributes.OfType<IModelNameProvider>())
+      {
+         isBindingInfoPresent = true;
+         if (binderModelNameAttribute?.Name != null)
+         {
+            bindingInfo.BinderModelName = binderModelNameAttribute.Name;
+            break;
+         }
+      }
+
+      // BinderType
+      foreach (var binderTypeAttribute in attributes.OfType<IBinderTypeProviderMetadata>())
+      {
+         isBindingInfoPresent = true;
+         if (binderTypeAttribute.BinderType != null)
+         {
+            bindingInfo.BinderType = binderTypeAttribute.BinderType;
+            break;
+         }
+      }
+
+      // BindingSource
+      foreach (var bindingSourceAttribute in attributes.OfType<IBindingSourceMetadata>())
+      {
+         isBindingInfoPresent = true;
+         if (bindingSourceAttribute.BindingSource != null)
+         {
+            bindingInfo.BindingSource = bindingSourceAttribute.BindingSource;
+            break;
+         }
+      }
+
+      // PropertyFilterProvider
+      var propertyFilterProviders = attributes.OfType<IPropertyFilterProvider>().ToArray();
+      if (propertyFilterProviders.Length == 1)
+      {
+         isBindingInfoPresent = true;
+         bindingInfo.PropertyFilterProvider = propertyFilterProviders[0];
+      }
+      else if (propertyFilterProviders.Length > 1)
+      {
+         isBindingInfoPresent = true;
+         bindingInfo.PropertyFilterProvider = new CompositePropertyFilterProvider(propertyFilterProviders);
+      }
+
+      // RequestPredicate
+      foreach (var requestPredicateProvider in attributes.OfType<IRequestPredicateProvider>())
+      {
+         isBindingInfoPresent = true;
+         if (requestPredicateProvider.RequestPredicate != null)
+         {
+            bindingInfo.RequestPredicate = requestPredicateProvider.RequestPredicate;
+            break;
+         }
+      }
+
+      foreach (var configureEmptyBodyBehavior in attributes.OfType<IConfigureEmptyBodyBehavior>())
+      {
+         isBindingInfoPresent = true;
+         bindingInfo.EmptyBodyBehavior = configureEmptyBodyBehavior.EmptyBodyBehavior;
+         break;
+      }
+
+      return isBindingInfoPresent ? bindingInfo : null;
+   }
+
+   public static BindingInfo? GetBindingInfo(IEnumerable<object> attributes, ModelMetadata modelMetadata)
+   {
+      var bindingInfo = GetBindingInfo(attributes);
+      var isBindingInfoPresent = bindingInfo != null;
+ 
+      if (bindingInfo == null)
+      {
+         bindingInfo = new BindingInfo();
+      }
+ 
+      isBindingInfoPresent |= bindingInfo.TryApplyBindingInfo(modelMetadata);
+ 
+      return isBindingInfoPresent ? bindingInfo : null;
+   }
+
+   public bool TryApplyBindingInfo(ModelMetadata modelMetadata)
+   {
+      var isBindingInfoPresent = false;
+      if (BinderModelName == null && modelMetadata.BinderModelName != null)
+      {
+         isBindingInfoPresent = true;
+         BinderModelName = modelMetadata.BinderModelName;
+      }
+
+      if (BinderType == null && modelMetadata.BinderType != null)
+      {
+         isBindingInfoPresent = true;
+         BinderType = modelMetadata.BinderType;
+      }
+
+      if (BindingSource == null && modelMetadata.BindingSource != null)
+      {
+         isBindingInfoPresent = true;
+         BindingSource = modelMetadata.BindingSource;
+      }
+
+      if (PropertyFilterProvider == null && modelMetadata.PropertyFilterProvider != null)
+      {
+         isBindingInfoPresent = true;
+         PropertyFilterProvider = modelMetadata.PropertyFilterProvider;
+      }
+
+      if (EmptyBodyBehavior == EmptyBodyBehavior.Default &&
+         BindingSource == BindingSource.Body &&
+         (modelMetadata.NullabilityState == NullabilityState.Nullable || modelMetadata.IsNullableValueType || modelMetadata.HasDefaultValue))
+      {
+         isBindingInfoPresent = true;
+         EmptyBodyBehavior = EmptyBodyBehavior.Allow;
+      }
+
+      return isBindingInfoPresent;
+   }
+
+   // inner private class
+   private sealed class CompositePropertyFilterProvider : IPropertyFilterProvider
+   {
+      private readonly IEnumerable<IPropertyFilterProvider> _providers;
+
+      public CompositePropertyFilterProvider(IEnumerable<IPropertyFilterProvider> providers)
+      {
+         _providers = providers;
+      }
+
+      public Func<ModelMetadata, bool> PropertyFilter => CreatePropertyFilter();
+
+      private Func<ModelMetadata, bool> CreatePropertyFilter()
+      {
+         var propertyFilters = _providers.Select(p => p.PropertyFilter).Where(p => p != null);
+         return (m) =>
+         {
+            foreach (var propertyFilter in propertyFilters)
+            {
+               if (!propertyFilter(m))
+               {
+                  return false;
+               }
+            }
+ 
+            return true;
+         };
+      }
+   }
+}
+```
+
+
+
+
 
 ```C#
 public class BindPropertyAttribute : Attribute, IBinderTypeProviderMetadata, IBindingSourceMetadata, IModelNameProvider, IRequestPredicateProvider

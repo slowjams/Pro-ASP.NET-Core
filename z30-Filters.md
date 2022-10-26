@@ -442,7 +442,59 @@ public class ExceptionContext : FilterContext
 ```C#
 public class FilterCollection : Collection<IFilterMetadata>
 {
+   public IFilterMetadata Add<TFilterType>() where TFilterType : IFilterMetadata
+   {
+      return Add(typeof(TFilterType));
+   }
 
+   public IFilterMetadata Add(Type filterType)
+   {
+      return Add(filterType, order: 0);
+   }
+
+   public IFilterMetadata Add<TFilterType>(int order) where TFilterType : IFilterMetadata
+   {
+      return Add(typeof(TFilterType), order);
+   }
+
+   public IFilterMetadata Add(Type filterType, int order)
+   {
+      if (!typeof(IFilterMetadata).IsAssignableFrom(filterType))
+      {
+         throw new ArgumentException(..., nameof(filterType));
+      }
+
+      var filter = new TypeFilterAttribute(filterType) { Order = order };    // <--------------------------
+      Add(filter);
+      return filter;
+   }
+
+   public IFilterMetadata AddService<TFilterType>() where TFilterType : IFilterMetadata
+   {
+      return AddService(typeof(TFilterType));
+   }
+
+   public IFilterMetadata AddService(Type filterType)
+   {
+      return AddService(filterType, order: 0);
+   }
+
+   public IFilterMetadata AddService<TFilterType>(int order) where TFilterType : IFilterMetadata
+   {
+      return AddService(typeof(TFilterType), order);
+   }
+
+   public IFilterMetadata AddService(Type filterType, int order)
+   {
+      if (!typeof(IFilterMetadata).IsAssignableFrom(filterType))
+      {
+         throw new ArgumentException(..., nameof(filterType));
+      }
+
+      var filter = new ServiceFilterAttribute(filterType) { Order = order };    // <--------------------------
+      Add(filter);
+      return filter;
+   }
 }
 ```
 
