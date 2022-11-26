@@ -1,0 +1,16 @@
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\ReflectionDemo\bin\Debug\netcoreapp3.1\ReflectionDemo.exe
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\ReflectionDemo\bin\Debug\netcoreapp3.1\ReflectionDemo.deps.json
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\ReflectionDemo\bin\Debug\netcoreapp3.1\ReflectionDemo.runtimeconfig.json
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\ReflectionDemo\bin\Debug\netcoreapp3.1\ReflectionDemo.runtimeconfig.dev.json
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\ReflectionDemo\bin\Debug\netcoreapp3.1\ReflectionDemo.dll
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\ReflectionDemo\bin\Debug\netcoreapp3.1\ReflectionDemo.pdb
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\ReflectionDemo\obj\Debug\netcoreapp3.1\ReflectionDemo.csproj.AssemblyReference.cache
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\ReflectionDemo\obj\Debug\netcoreapp3.1\ReflectionDemo.GeneratedMSBuildEditorConfig.editorconfig
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\ReflectionDemo\obj\Debug\netcoreapp3.1\ReflectionDemo.AssemblyInfoInputs.cache
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\ReflectionDemo\obj\Debug\netcoreapp3.1\ReflectionDemo.AssemblyInfo.cs
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\ReflectionDemo\obj\Debug\netcoreapp3.1\ReflectionDemo.csproj.CoreCompileInputs.cache
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\ReflectionDemo\obj\Debug\netcoreapp3.1\ReflectionDemo.dll
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\ReflectionDemo\obj\Debug\netcoreapp3.1\ReflectionDemo.pdb
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\ReflectionDemo\obj\Debug\netcoreapp3.1\ReflectionDemo.genruntimeconfig.cache
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\ReflectionDemo\bin\Debug\netcoreapp3.1\MyControlLibary.dll
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\ReflectionDemo\obj\Debug\netcoreapp3.1\ReflectionDemo.csproj.CopyComplete

@@ -214,7 +214,7 @@ internal sealed class ControllerActionInvokerCache
 
          var controllerFactory = _controllerFactoryProvider.CreateControllerFactory(actionDescriptor);  
          var controllerReleaser = _controllerFactoryProvider.CreateAsyncControllerReleaser(actionDescriptor);   
-         var propertyBinderFactory = ControllerBinderDelegateProvider.CreateBinderDelegate(   //----------------------------2.1
+         ControllerBinderDelegate propertyBinderFactory = ControllerBinderDelegateProvider.CreateBinderDelegate(   //----------------------------2.1
             _parameterBinder,
             _modelBinderFactory,
             _modelMetadataProvider,
@@ -2258,7 +2258,7 @@ public class SimpleTypeModelBinder : IModelBinder
 
    public Task BindModelAsync(ModelBindingContext bindingContext)
    {
-      var valueProviderResult = bindingContext.ValueProvider.GetValue(bindingContext.ModelName);
+      ValueProviderResult valueProviderResult = bindingContext.ValueProvider.GetValue(bindingContext.ModelName);
       if (valueProviderResult == ValueProviderResult.None) {
          return Task.CompletedTask;
       }
@@ -2267,7 +2267,7 @@ public class SimpleTypeModelBinder : IModelBinder
 
       try
       {
-         var value = valueProviderResult.FirstValue;
+         string value = valueProviderResult.FirstValue;
          
          object? model;
          if (bindingContext.ModelType == typeof(string))
@@ -2380,7 +2380,7 @@ public sealed partial class ComplexObjectModelBinder : IModelBinder
    internal const int ValueProviderDataAvailable = 2;
 
    private readonly IDictionary<ModelMetadata, IModelBinder> _propertyBinders;
-   private readonly IReadOnlyList<IModelBinder> _parameterBinders;
+   private readonly IReadOnlyList<IModelBinder> _parameterBinders;  // <----------------------
    private readonly ILogger _logger;
    private Func<object>? _modelCreator;
 
@@ -2523,11 +2523,11 @@ public sealed partial class ComplexObjectModelBinder : IModelBinder
          if (!CanBindItem(bindingContext, parameter))
             continue;
  
-         var parameterBinder = _parameterBinders[i];
+         IModelBinder parameterBinder = _parameterBinders[i];
 
          // ...
 
-         var result = await BindParameterAsync(bindingContext, parameter, parameterBinder, fieldName, modelName);
+         ModelBindingResult result = await BindParameterAsync(bindingContext, parameter, parameterBinder, fieldName, modelName);
 
          if (result.IsModelSet)
          {
@@ -2949,162 +2949,91 @@ public partial class ParameterBinder
    }
 }
 //----------------------------------Ʌ
-
-//-------------------------------V
-public class ModelStateDictionary : IReadOnlyDictionary<string, ModelStateEntry?>  // represents the state of an attempt to bind values from an HTTP Request 
-{                                                                                  // to an action method, which includes validation information
-   public static readonly int DefaultMaxAllowedErrors = 200;
-   
-   // internal for testing
-   internal const int DefaultMaxRecursionDepth = 32;
- 
-   private const char DelimiterDot = '.';
-   private const char DelimiterOpen = '[';
- 
-   private readonly ModelStateNode _root;
-   private int _maxAllowedErrors;
-
-   public ModelStateDictionary() : this(DefaultMaxAllowedErrors) { }
-
-   // ...
-
-   private ModelStateDictionary(int maxAllowedErrors, int maxValidationDepth, int maxStateDepth)
-   {
-      MaxAllowedErrors = maxAllowedErrors;
-      MaxValidationDepth = maxValidationDepth;
-      MaxStateDepth = maxStateDepth;
-      var emptySegment = new StringSegment(buffer: string.Empty);
-       _root = new ModelStateNode(subKey: emptySegment)
-      {
-         Key = string.Empty
-      };
-   }
-
-   public ModelStateEntry Root => _root;
-
-   public int MaxAllowedErrors
-   {
-      get {
-         return _maxAllowedErrors;
-      }
-      set {
-         _maxAllowedErrors = value;
-      }
-   }
-
-   public bool HasReachedMaxErrors => ErrorCount >= MaxAllowedErrors;
-   public int ErrorCount { get; private set; }
-   public int Count { get; private set; }
-   public KeyEnumerable Keys => new KeyEnumerable(this);
-
-   public bool IsValid
-   {
-      get {
-         var state = ValidationState;
-         return state == ModelValidationState.Valid || state == ModelValidationState.Skipped;
-      }
-   }
-
-   public ModelValidationState ValidationState => GetValidity(_root, currentDepth: 0) ?? ModelValidationState.Valid;
-
-   public ModelStateEntry? this[string key]
-   {
-      get {          
-         TryGetValue(key, out var entry);
-         return entry;
-      }
-   }
-
-   public bool TryGetValue(string key, [NotNullWhen(true)] out ModelStateEntry? value)
-   {
-      var result = GetNode(key);
-      if (result?.IsContainerNode == false)
-      {
-         value = result;
-         return true;
-      }
- 
-      value = null;
-      return false;
-   }
-
-   private ModelStateNode? GetNode(string key)
-   {
-      var current = _root;
-      if (key.Length > 0)
-      {
-         var match = default(MatchResult);
-         do
-         {
-            var subKey = FindNext(key, ref match);
-            current = current.GetNode(subKey);
- 
-            // Path not found, exit early
-            if (current == null)
-               break;
- 
-         } while (match.Type != Delimiter.None);
-      }
- 
-      return current;
-   }
-
-   public void AddModelError(string key, Exception exception, ModelMetadata metadata)
-   {
-      TryAddModelError(key, exception, metadata);
-   }
-
-   public bool TryAddModelException(string key, Exception exception)
-   {
-      if ((exception is InputFormatterException || exception is ValueProviderException) && !string.IsNullOrEmpty(exception.Message))
-      {
-         // InputFormatterException, ValueProviderException is a signal that the message is safe to expose to clients
-         return TryAddModelError(key, exception.Message);
-      }
- 
-      if (ErrorCount >= MaxAllowedErrors - 1)
-      {
-         EnsureMaxErrorsReachedRecorded();
-         return false;
-      }
- 
-      AddModelErrorCore(key, exception);
-      return true;
-   }
-
-   public bool TryAddModelError(string key, Exception exception, ModelMetadata metadata) { ... }
-
-   public void AddModelError(string key, string errorMessage)
-   {
-      TryAddModelError(key, errorMessage);
-   }
-
-   public bool TryAddModelError(string key, string errorMessage)
-   {     
-      if (ErrorCount >= MaxAllowedErrors - 1)
-      {
-         EnsureMaxErrorsReachedRecorded();
-         return false;
-      }
- 
-      var modelState = GetOrAddNode(key);
-      Count += !modelState.IsContainerNode ? 0 : 1;
-      modelState.ValidationState = ModelValidationState.Invalid;
-      modelState.MarkNonContainerNode();
-      modelState.Errors.Add(errorMessage);
- 
-      ErrorCount++;
-      return true;
-   }
-
-   // continue ...hghghdgfhdgfhdgfg
-}
-//-------------------------------Ʌ
 ```
 
--------------------------------------------------------------------------------------------------------------------------------------------------
-
 ```C#
+//------------------------V
+public class BindAttribute : Attribute, IModelNameProvider, IPropertyFilterProvider
+{
+   private static readonly Func<ModelMetadata, bool> _default = (m) => true;
+   
+   private Func<ModelMetadata, bool>? _propertyFilter;
+
+   public BindAttribute(params string[] include)
+   {
+      var items = new List<string>(include.Length);
+      foreach (var item in include)
+      {
+         items.AddRange(SplitString(item));
+      }
+
+      Include = items.ToArray();
+   }
+
+   public string[] Include { get; }
+   public string? Prefix { get; set; }   // <---------------------
+   string? IModelNameProvider.Name => Prefix;
+
+   public Func<ModelMetadata, bool> PropertyFilter
+   {
+      get {
+         if (Include != null && Include.Length > 0)
+         {
+            _propertyFilter ??= PropertyFilter;
+            return _propertyFilter;
+         }
+         else
+         {
+            return _default;
+         }
+ 
+         bool PropertyFilter(ModelMetadata modelMetadata)
+         {
+            if (modelMetadata.MetadataKind == ModelMetadataKind.Parameter)
+            {
+               return Include.Contains(modelMetadata.ParameterName, StringComparer.Ordinal);
+            }
+ 
+            return Include.Contains(modelMetadata.PropertyName, StringComparer.Ordinal);
+         }
+      }
+   }
+
+   private static IEnumerable<string> SplitString(string original) 
+   {
+      return original?.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries) ?? Array.Empty<string>();
+   } 
+}
+//------------------------Ʌ
+
+//-----------------------------------V
+public class BindingBehaviorAttribute : Attribute
+{
+   public BindingBehaviorAttribute(BindingBehavior behavior)
+   {
+      Behavior = behavior;
+   }
+}
+
+public BindingBehavior Behavior { get; }
+//-----------------------------------Ʌ
+
+//
+public enum BindingBehavior
+{
+   Optional = 0,
+   Never,
+   Required
+}
+//
+
+//------------------------------------V
+public sealed class BindNeverAttribute : BindingBehaviorAttribute
+{
+   public BindNeverAttribute() : base(BindingBehavior.Never) { }
+}
+//------------------------------------Ʌ
+
 public class BindPropertyAttribute : Attribute, IBinderTypeProviderMetadata, IBindingSourceMetadata, IModelNameProvider, IRequestPredicateProvider
 {
    public BindPropertyAttribute();
@@ -3115,11 +3044,7 @@ public class BindPropertyAttribute : Attribute, IBinderTypeProviderMetadata, IBi
    public bool SupportsGet { get; set; }
 }
 
-public class BindAttribute : Attribute, IModelNameProvider, IPropertyFilterProvider
-{
-   public BindAttribute(params string[] include);
-   public string[] Include { get; }
-   public string Prefix { get; set; }
-   public Func<ModelMetadata, bool> PropertyFilter { get; }
-}
+
+
+
 ```

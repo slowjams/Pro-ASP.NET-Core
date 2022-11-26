@@ -1,0 +1,10 @@
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\UIControlLibrary\bin\Debug\netcoreapp3.1\UIControlLibrary.deps.json
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\UIControlLibrary\bin\Debug\netcoreapp3.1\UIControlLibrary.dll
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\UIControlLibrary\bin\Debug\netcoreapp3.1\UIControlLibrary.pdb
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\UIControlLibrary\obj\Debug\netcoreapp3.1\UIControlLibrary.csproj.AssemblyReference.cache
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\UIControlLibrary\obj\Debug\netcoreapp3.1\UIControlLibrary.GeneratedMSBuildEditorConfig.editorconfig
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\UIControlLibrary\obj\Debug\netcoreapp3.1\UIControlLibrary.AssemblyInfoInputs.cache
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\UIControlLibrary\obj\Debug\netcoreapp3.1\UIControlLibrary.AssemblyInfo.cs
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\UIControlLibrary\obj\Debug\netcoreapp3.1\UIControlLibrary.csproj.CoreCompileInputs.cache
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\UIControlLibrary\obj\Debug\netcoreapp3.1\UIControlLibrary.dll
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\UIControlLibrary\obj\Debug\netcoreapp3.1\UIControlLibrary.pdb

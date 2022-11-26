@@ -1946,7 +1946,7 @@ internal sealed class ControllerActionInvokerCache                // <----------
 
          var controllerFactory = _controllerFactoryProvider.CreateControllerFactory(actionDescriptor);   // <----------------------c3<
          var controllerReleaser = _controllerFactoryProvider.CreateAsyncControllerReleaser(actionDescriptor);   
-         var propertyBinderFactory = ControllerBinderDelegateProvider.CreateBinderDelegate(   // <---------------------------------b1.a
+         ControllerBinderDelegate propertyBinderFactory = ControllerBinderDelegateProvider.CreateBinderDelegate(   // <---------------------------------b1.a
             _parameterBinder,
             _modelBinderFactory,
             _modelMetadataProvider,
@@ -1976,6 +1976,8 @@ internal sealed class ControllerActionInvokerCache                // <----------
       return (cacheEntry, filters);    // <---------------------------------f3.3
    }
 }
+//------------------------------------------------Ʌ
+internal delegate Task ControllerBinderDelegate(ControllerContext controllerContext, object controller, Dictionary<string, object?> arguments);
 //------------------------------------------------Ʌ
 
 //--------------------------------V
@@ -2331,7 +2333,7 @@ internal abstract partial class ResourceInvoker                    // <---------
    private ResultExecutedContextSealed? _resultExecutedContext;
 
    protected FilterCursor _cursor;
-   protected IActionResult _result;
+   protected IActionResult _result;  // <-----------------
    protected object _instance;   // this field stores Controller instance
 
    public ResourceInvoker(DiagnosticListener diagnosticListener, ILogger logger, IActionContextAccessor actionContextAccessor, IActionResultTypeMapper mapper,
@@ -3260,7 +3262,7 @@ internal partial class ControllerActionInvoker : ResourceInvoker, IActionInvoker
       }
    }
    
-   private Task InvokeActionMethodAsync()
+   private Task InvokeActionMethodAsync()   // <----------------------------
    {
       var objectMethodExecutor = _cacheEntry.ObjectMethodExecutor;
       var actionMethodExecutor = _cacheEntry.ActionMethodExecutor;
@@ -3537,17 +3539,3 @@ internal abstract class ActionMethodExecutor
 }
 //------------------------------------------Ʌ
 ```
-
-
-<style type="text/css">
-.markdown-body {
-  max-width: 1800px;
-  margin-left: auto;
-  margin-right: auto;
-}
-</style>
-
-<link rel="stylesheet" href="./zCSS/bootstrap.min.css">
-<script src="./zCSS/jquery-3.3.1.slim.min.js"></script>
-<script src="./zCSS/popper.min.js"></script>
-<script src="./zCSS/bootstrap.min.js"></script>

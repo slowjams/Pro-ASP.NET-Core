@@ -1,0 +1,13 @@
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\MyControlLibary\bin\Debug\netcoreapp3.1\MyControlLibary.deps.json
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\MyControlLibary\bin\Debug\netcoreapp3.1\MyControlLibary.dll
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\MyControlLibary\bin\Debug\netcoreapp3.1\MyControlLibary.pdb
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\MyControlLibary\bin\Debug\netcoreapp3.1\UIControlLibrary.dll
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\MyControlLibary\bin\Debug\netcoreapp3.1\UIControlLibrary.pdb
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\MyControlLibary\obj\Debug\netcoreapp3.1\MyControlLibary.csproj.AssemblyReference.cache
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\MyControlLibary\obj\Debug\netcoreapp3.1\MyControlLibary.GeneratedMSBuildEditorConfig.editorconfig
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\MyControlLibary\obj\Debug\netcoreapp3.1\MyControlLibary.AssemblyInfoInputs.cache
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\MyControlLibary\obj\Debug\netcoreapp3.1\MyControlLibary.AssemblyInfo.cs
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\MyControlLibary\obj\Debug\netcoreapp3.1\MyControlLibary.csproj.CoreCompileInputs.cache
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\MyControlLibary\obj\Debug\netcoreapp3.1\MyControlLibary.csproj.CopyComplete
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\MyControlLibary\obj\Debug\netcoreapp3.1\MyControlLibary.dll
+C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\MyControlLibary\obj\Debug\netcoreapp3.1\MyControlLibary.pdb

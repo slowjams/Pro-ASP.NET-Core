@@ -1,13 +1,15 @@
 Chapter 28- Model Binding and Validation
 =================================
 
-* Form data
+Model Binding looks for value in the following order:
 
-* Request body (only for controllers decorated with `ApiController`)
+1. form data
 
-* Routing segment variables
+2. request body (only for controllers decorated with `ApiController`)
 
-* Query strings
+3. routing segment variables
+
+4. query strings
 
 The model binding process inspects the complex type and performs the binding process on **each of the public properties** it defines
 

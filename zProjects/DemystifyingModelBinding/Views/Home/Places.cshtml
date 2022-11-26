@@ -1,0 +1,30 @@
+﻿@model List<string>
+@{
+    ViewData["Title"] = "Places";
+}
+  
+<h2>Places</h2>
+  
+@if (Model.Count == 0)
+{
+    <form asp-action="Places" method="post">
+        @for (int i = 1; i <= 3; i++)
+        {
+            <div class="form-group">
+                <label>Place @i:</label>
+                <input name="places" class="form-control" />
+            </div>
+        }
+        <button type="submit" class="btn btn-primary">Submit</button>
+    </form>
+}
+else
+{
+    <table class="table table-sm table-bordered table-striped">
+        @foreach (string place in Model)
+        {
+            <tr><th>Place:</th><td>@place</td></tr>
+        }
+    </table>
+    <a asp-action="Places" class="btn btn-primary">Back</a>
+}

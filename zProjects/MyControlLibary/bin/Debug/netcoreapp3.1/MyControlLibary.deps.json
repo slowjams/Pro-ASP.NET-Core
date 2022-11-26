@@ -1,0 +1,36 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v3.1",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v3.1": {
+      "MyControlLibary/1.0.0": {
+        "dependencies": {
+          "UIControlLibrary": "1.0.0"
+        },
+        "runtime": {
+          "MyControlLibary.dll": {}
+        }
+      },
+      "UIControlLibrary/1.0.0": {
+        "runtime": {
+          "UIControlLibrary.dll": {}
+        }
+      }
+    }
+  },
+  "libraries": {
+    "MyControlLibary/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "UIControlLibrary/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}
