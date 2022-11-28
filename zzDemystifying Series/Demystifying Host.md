@@ -526,8 +526,8 @@ public static class Host {  // provides convenience methods for creating instanc
       // ----------------------------------------------------------------------------------------------------------------------------------------
       builder.ConfigureLogging((hostingContext, logging) => {
          logging.AddConfiguration(hostingContext.Configuration.GetSection("Logging"));
-         logging.AddConsole();
-         logging.AddDebug();
+         logging.AddConsole();   // <---------------------- add ConsoleLoggerProvider by default
+         logging.AddDebug();     // <---------------------- add DebugLoggerProvider by default
       });
 
       // Configures the DI container

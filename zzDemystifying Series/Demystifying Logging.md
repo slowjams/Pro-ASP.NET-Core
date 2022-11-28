@@ -1,6 +1,15 @@
 Demystifying Logging
 ==============================
 
+Below are buildt-in logger provider:
+
+1. `ConsoleLoggerProvider` (`ConsoleLogger`) : writes messages to the console
+2. `DebugLoggerProvider` (`DebugLogger`) : writes messages to the debug window when debugging an app in VS
+3. `EventLogLoggerProvider` (`EventLogLogger`) : Windows-only as it requires Windows-specific APIs
+4. `EventSourceLoggerProvider` (`EventSourceLogger`) : writes messages using Event Tracing for Windows (ETW) or LTTng tracing on Linux
+
+Note that .NET Core doesn't provder "FileLogger", which you have to use a third-party libary
+
 ```C#
 public class Program {
    public static void Main(string[] args) {
@@ -12,58 +21,40 @@ public class Program {
            .ConfigureWebHostDefaults(webBuilder => {
               webBuilder.UseStartup<Startup>();
            })
-           .ConfigureLogging(logger => {       // logger is ILoggingBuilder
-              logger.AddConsole(options => {   // options is ConsoleLoggerOptions
-                 options.IncludeScopes = true;
-              });
+           .ConfigureLogging(logger =>  // logger is ILoggingBuilder
+           {       
+              logger.AddConsole(  // <-----------------------------------------1
+                 options => // options is ConsoleLoggerOptions
+                 {   
+                    options.IncludeScopes = true;
+                 }
+               );
            });
 }
-```
 
-Note that both `ILoggerFactory` and `ILogger<T>` has been registered via `services.AddLogging()` (in `Host.CreateDefaultBuilder()`) as :
-```C#
-public static class LoggingServiceCollectionExtensions {
-   
-   public static IServiceCollection AddLogging(this IServiceCollection services) {
-      return AddLogging(services, builder => { });
-   }
-
-   public static IServiceCollection AddLogging(this IServiceCollection services, Action<ILoggingBuilder> configure) {
-      services.AddOptions();
-
-      services.TryAdd(ServiceDescriptor.Singleton<ILoggerFactory, LoggerFactory>());
-      services.TryAdd(ServiceDescriptor.Singleton(typeof(ILogger<>), typeof(Logger<>)));
-      // ...
-      return services;
-   }
-}
-```
-That's why you can use `ILogger<T>` on the fly as:
-
-```C#
+// example
 public class MyService {
 
-   public MyService(ILogger<MyService> logger) {
+   public MyService(ILogger<MyService> logger) {  // <------------------------4_
       // ...
    }
    // ...
 }
-```
 
-You can see a lot of buillt-in middlewares that uses DI to inject a logger:
-```C#
+// example
 public class CookiePolicyMiddleware {
    private readonly RequestDelegate _next;
    private readonly ILogger _logger;
-                                                       // <-------------------------------b0
+                                                      
    public CookiePolicyMiddleware(RequestDelegate next, IOptions<CookiePolicyOptions> options, ILoggerFactory factory) {
       // ...
       _next = next;
       _logger = factory.CreateLogger<CookiePolicyMiddleware>();
    }
 
-   public Task Invoke(HttpContext context) {
-      var feature = context.Features.Get<IResponseCookiesFeature>() ?? new ResponseCookiesFeature(context.Features) // <-------------b2
+   public Task Invoke(HttpContext context) 
+   {
+      var feature = context.Features.Get<IResponseCookiesFeature>() ?? new ResponseCookiesFeature(context.Features) 
       var wrapper = new ResponseCookiesWrapper(context, Options, feature, _logger);
       context.Features.Set<IResponseCookiesFeature>(new CookiesWrapperFeature(wrapper));
       context.Features.Set<ITrackingConsentFeature>(wrapper);
@@ -73,32 +64,200 @@ public class CookiePolicyMiddleware {
 }
 ```
 
+Quick dependencies simplified code:
+
+```C#
+//---------------------------------V
+public class Logger<T> : ILogger<T>  // so inject `Logger<T>` is just an indirect call version of injecting `ILoggerFactory`
+{
+   public Logger(ILoggerFactory factory) 
+   {   
+      _logger = factory.CreateLogger(TypeNameHelper.GetTypeDisplayName(typeof(T), includeGenericParameters: false, nestedTypeDelimiter: '.')); 
+   }
+
+   // ...
+}
+//---------------------------------Ʌ
+
+//-----------------------------------------V
+public class LoggerFactory : ILoggerFactory   // contains `ILoggerProvider`
+{
+   private readonly Dictionary<string, Logger> _loggers = new Dictionary<string, Logger>(StringComparer.Ordinal);
+
+   public LoggerFactory(IEnumerable<ILoggerProvider> providers, ...)
+   {
+      foreach (ILoggerProvider provider in providers)
+      {
+         AddProviderRegistration(provider, dispose: false);
+      }
+   }
+
+   private void AddProviderRegistration(ILoggerProvider provider, bool dispose) 
+   {
+      _providerRegistrations.Add(new ProviderRegistration
+      {
+         Provider = provider,   // <------------
+         ShouldDispose = dispose
+      });
+ 
+      // ...
+   }
+
+   public ILogger CreateLogger(string categoryName)
+   {
+      if (!_loggers.TryGetValue(categoryName, out Logger? logger))
+      {
+         logger = new Logger(CreateLoggers(categoryName));   // only a single Logger instance is needed
+         (logger.MessageLoggers, logger.ScopeLoggers) = ApplyFilters(logger.Loggers);
+         _loggers[categoryName] = logger;
+      }
+
+       return logger;
+   }
+
+   private LoggerInformation[] CreateLoggers(string categoryName)  
+   {
+      var loggers = new LoggerInformation[_providerRegistrations.Count];
+      for (int i = 0; i < _providerRegistrations.Count; i++)
+      {
+         loggers[i] = new LoggerInformation(_providerRegistrations[i].Provider,   // <-----------pass ILoggerProvider to LoggerInformation
+                                            categoryName);
+      }
+      return loggers;
+   }
+}
+//-----------------------------------------Ʌ
+
+//----------------------------------------V
+internal readonly struct LoggerInformation  // has dependency of ILoggerProvider
+{
+   public LoggerInformation(ILoggerProvider provider, string category) : this()
+   {
+      ProviderType = provider.GetType();
+      Logger = provider.CreateLogger(category);  // <--------------use ILoggerProvider to create an ILogger
+      Category = category;
+   }
+ 
+   public ILogger Logger { get; }   // <----------------create concrete ILogger, e.g `ConsoleLogger`
+ 
+   public string Category { get; }
+ 
+   public Type ProviderType { get; }
+}
+//----------------------------------------Ʌ
+
+//--------------------------V
+internal sealed class Logger : ILogger   // Logger is a wrapper so it contains multiple ILoggers via `LoggerInformation`
+{
+   public Logger(LoggerInformation[] loggers) 
+   {
+      Loggers = loggers;
+   } 
+
+   public LoggerInformation[] Loggers { get; set; }   // contains multiple ILoggers, such as `ConsoleLogger`, `DebugLogger` etc
+
+   public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
+   {
+      // ...
+      for (int i = 0; i < loggers.Length; i++)   // that's why muliple sinks can be logged in once
+      {
+         LoggerLog(logLevel,
+                   eventId,
+                   loggerInfo.Logger,  // <---------------
+                   ...
+                  );
+      }
+   }
+
+   static void LoggerLog(LogLevel logLevel, EventId eventId, ILogger logger, ...)
+   {
+      logger.Log(logLevel, eventId, ...);
+   }
+}
+//--------------------------Ʌ
+```
+
+
 ## Source Code
 
 ```C#
-//-----------------------------------------V
-public static class ConsoleLoggerExtensions
+//----------------------------------------------------V
+public static class LoggingServiceCollectionExtensions
 {
-   public static ILoggingBuilder AddConsole(this ILoggingBuilder builder)
+   public static IServiceCollection AddLogging(this IServiceCollection services)
    {
-      builder.AddConfiguration();  // <--------------------------------------------------------------------------1
-                                   // register LoggerProviderConfigurationFactory and LoggerProviderConfiguration
+      return AddLogging(services, builder => { });
+   }
 
-      builder.AddConsoleFormatter<JsonConsoleFormatter, JsonConsoleFormatterOptions>();   // <-------------------2
-      builder.AddConsoleFormatter<SystemdConsoleFormatter, ConsoleFormatterOptions>();
-      builder.AddConsoleFormatter<SimpleConsoleFormatter, SimpleConsoleFormatterOptions>();
-
-      builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<ILoggerProvider, ConsoleLoggerProvider>());
-      LoggerProviderOptions.RegisterProviderOptions<ConsoleLoggerOptions, ConsoleLoggerProvider>(builder.Services);
+   public static IServiceCollection AddLogging(this IServiceCollection services, Action<ILoggingBuilder> configure)
+   {
+      services.AddOptions();
  
+      services.TryAdd(ServiceDescriptor.Singleton<ILoggerFactory, LoggerFactory>());      // <-------------------------
+      services.TryAdd(ServiceDescriptor.Singleton(typeof(ILogger<>), typeof(Logger<>)));  // <-------------------------
+ 
+      services.TryAddEnumerable(ServiceDescriptor.Singleton<IConfigureOptions<LoggerFilterOptions>>(new DefaultLoggerLevelConfigureOptions(LogLevel.Information)));
+ 
+      configure(new LoggingBuilder(services));
+      return services;
+   }
+}
+//----------------------------------------------------Ʌ
+
+//------------------------------------------V
+public static class LoggingBuilderExtensions
+{
+   public static ILoggingBuilder SetMinimumLevel(this ILoggingBuilder builder, LogLevel level)
+   {
+      builder.Services.Add(ServiceDescriptor.Singleton<IConfigureOptions<LoggerFilterOptions>>(new DefaultLoggerLevelConfigureOptions(level)));
       return builder;
    }
 
-   public static ILoggingBuilder AddConsole(this ILoggingBuilder builder, Action<ConsoleLoggerOptions> configure)
+   public static ILoggingBuilder AddProvider(this ILoggingBuilder builder, ILoggerProvider provider)
    {
-      builder.AddConsole();
+      builder.Services.AddSingleton(provider);
+      return builder;
+   }
+
+   public static ILoggingBuilder ClearProviders(this ILoggingBuilder builder)
+   {
+      builder.Services.RemoveAll<ILoggerProvider>();
+      return builder;
+   }
+
+   public static ILoggingBuilder Configure(this ILoggingBuilder builder, Action<LoggerFactoryOptions> action)
+   {
+      builder.Services.Configure(action);
+      return builder;
+   }
+}
+//------------------------------------------Ʌ
+
+//-----------------------------------------V
+public static class ConsoleLoggerExtensions
+{
+   public static ILoggingBuilder AddConsole(this ILoggingBuilder builder, Action<ConsoleLoggerOptions> configure)  // <----------------------------2
+   {
+      builder.AddConsole();   // <-------------------3
       builder.Services.Configure(configure);
  
+      return builder;
+   }
+   
+   public static ILoggingBuilder AddConsole(this ILoggingBuilder builder)
+   {
+      builder.AddConfiguration();  // <-----------------------------3.1, register LoggerProviderConfigurationFactory and LoggerProviderConfiguration
+
+      builder.AddConsoleFormatter<JsonConsoleFormatter, JsonConsoleFormatterOptions>();   
+      builder.AddConsoleFormatter<SystemdConsoleFormatter, ConsoleFormatterOptions>();
+      builder.AddConsoleFormatter<SimpleConsoleFormatter, SimpleConsoleFormatterOptions>();
+                                                                                              // <-------------------3.2
+
+      builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<ILoggerProvider, ConsoleLoggerProvider>());   // <----------------3.3!
+                                                                                                                  // notice the usage of TryAddEnumerable  
+      LoggerProviderOptions
+         .RegisterProviderOptions<ConsoleLoggerOptions, ConsoleLoggerProvider>(builder.Services);  // <--------------------------------------------3.4->, register below
+                                                                                                   // LoggerProviderConfigureOptions<ConsoleLoggerOptions, ConsoleLoggerProvider>
       return builder;
    }
 
@@ -154,6 +313,26 @@ public static class ConsoleLoggerExtensions
    }
 }
 //-----------------------------------------Ʌ
+
+//----------------------------------------------V
+public static class DebugLoggerFactoryExtensions
+{
+   public static ILoggingBuilder AddDebug(this ILoggingBuilder builder)
+   {
+      builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<ILoggerProvider, DebugLoggerProvider>());
+      return builder;
+   }
+}
+//----------------------------------------------Ʌ
+
+public static class LoggerProviderOptions
+{
+   public static void RegisterProviderOptions<TOptions, TProvider>(IServiceCollection services)
+   {
+      services.TryAddEnumerable(ServiceDescriptor.Singleton<IConfigureOptions<TOptions>, LoggerProviderConfigureOptions<TOptions, TProvider>>());  // <---------3.4.1_
+      services.TryAddEnumerable(ServiceDescriptor.Singleton<IOptionsChangeTokenSource<TOptions>, LoggerProviderOptionsChangeTokenSource<TOptions, TProvider>>());
+   }  
+}
 
 //----------------------------------------------V
 public static class EventLoggerFactoryExtensions
@@ -352,13 +531,6 @@ internal sealed class LoggerProviderConfiguration<T> : ILoggerProviderConfigurat
 }
 //--------------------------------------------------Ʌ
 
-//------------------------------>>
-public interface ILoggerProvider : IDisposable
-{
-   ILogger CreateLogger(string categoryName);
-}
-//------------------------------<<
-
 //------------------------------------>>
 public interface ISupportExternalScope
 {
@@ -373,6 +545,13 @@ public interface IExternalScopeProvider
    IDisposable Push(object? state);
 }
 //-------------------------------------<<
+
+//------------------------------>>
+public interface ILoggerProvider : IDisposable
+{
+   ILogger CreateLogger(string categoryName);
+}
+//------------------------------<<
 
 //--------------------------------V
 public class ConsoleLoggerProvider : ILoggerProvider, ISupportExternalScope   // ConsoleLoggerProvider implements ISupportExternalScope
@@ -521,6 +700,44 @@ public class ConsoleLoggerProvider : ILoggerProvider, ISupportExternalScope   //
    }
 }
 //--------------------------------Ʌ
+
+//-----------------------------V
+internal sealed class NullScope : IDisposable
+{
+   public static NullScope Instance { get; } = new NullScope();
+   private NullScope() { }
+   public void Dispose() { }
+}
+//-----------------------------Ʌ
+
+//---------------------------------------------V
+internal sealed class NullExternalScopeProvider : IExternalScopeProvider
+{
+   private NullExternalScopeProvider() { }
+
+   public static IExternalScopeProvider Instance { get; } = new NullExternalScopeProvider();
+
+   void IExternalScopeProvider.ForEachScope<TState>(Action<object?, TState> callback, TState state) 
+   { 
+
+   }
+
+   IDisposable IExternalScopeProvider.Push(object? state)
+   {
+      return NullScope.Instance;
+   }
+}
+//---------------------------------------------Ʌ
+
+/*  very complicated
+internal sealed class LoggerFactoryScopeProvider : IExternalScopeProvider
+{
+   private readonly AsyncLocal<Scope?> _currentScope = new AsyncLocal<Scope?>();
+   private readonly ActivityTrackingOptions _activityTrackingOption;
+
+
+}
+*/
 
 //-------------------------------------V
 public readonly struct LogEntry<TState>
@@ -738,11 +955,40 @@ public enum LogLevel
    Error = 4,        // logs that highlight when the current flow of execution is stopped due to a failure 
                      // these should indicate a failure in the current activity, not an application-wide failure
 
-   Critical =5,      // logs that describe an unrecoverable application or system crash, or a catastrophic failure that requires immediate attention
+   Critical = 5,     // logs that describe an unrecoverable application or system crash, or a catastrophic failure that requires immediate attention
 
    None = 6          // not used for writing log messages. Specifies that a logging category should not write any message
 }
 //------------------Ʌ
+
+//----------------------------------V
+public static class LoggerExtensions
+{
+   private static readonly Func<FormattedLogValues, Exception?, string> _messageFormatter = MessageFormatter;
+
+   public static void LogDebug(this ILogger logger, EventId eventId, string? message, params object?[] args)
+   {
+      logger.Log(LogLevel.Debug, eventId, message, args);
+   }
+
+   public static void LogDebug(this ILogger logger, EventId eventId, Exception? exception, string? message, params object?[] args)
+   {
+      logger.Log(LogLevel.Debug, eventId, exception, message, args);
+   }
+
+   // ...
+
+   public static IDisposable? BeginScope(this ILogger logger, string messageFormat, params object?[] args)
+   {
+      return logger.BeginScope(new FormattedLogValues(messageFormat, args));
+   }
+
+   private static string MessageFormatter(FormattedLogValues state, Exception? error)
+   {
+      return state.ToString();
+   }
+}
+//----------------------------------Ʌ
 
 //------------------------------>>
 public interface ILoggingBuilder   // an interface for configuring logging providers
@@ -923,7 +1169,7 @@ public interface ILoggerFactory : IDisposable
 //-----------------------------Ʌ
 
 //------------------------V
-public class LoggerFactory : ILoggerFactory
+public class LoggerFactory : ILoggerFactory   // <-------------------------5.0
 {
    private readonly Dictionary<string, Logger> _loggers = new Dictionary<string, Logger>(StringComparer.Ordinal);
    private readonly List<ProviderRegistration> _providerRegistrations = new List<ProviderRegistration>();
@@ -957,7 +1203,7 @@ public class LoggerFactory : ILoggerFactory
  
       foreach (ILoggerProvider provider in providers)
       {
-         AddProviderRegistration(provider, dispose: false);
+         AddProviderRegistration(provider, dispose: false);  // <-------------------------5.0->
       }
  
       _changeTokenRegistration = filterOption.OnChange(RefreshFilters);
@@ -966,14 +1212,14 @@ public class LoggerFactory : ILoggerFactory
 
    public static ILoggerFactory Create(Action<ILoggingBuilder> configure)
    {
-      var serviceCollection = new ServiceCollection();
-      serviceCollection.AddLogging(configure);
+      var serviceCollection = new ServiceCollection();  // <------------------------------logging uses a separate ServiceCollection
+      serviceCollection.AddLogging(configure);          // <------------------------------register
       ServiceProvider serviceProvider = serviceCollection.BuildServiceProvider();
       ILoggerFactory loggerFactory = serviceProvider.GetRequiredService<ILoggerFactory>();
       return new DisposingLoggerFactory(loggerFactory, serviceProvider);
    }
 
-   public ILogger CreateLogger(string categoryName)
+   public ILogger CreateLogger(string categoryName)  // <--------------------5.2
    {
       if (CheckDisposed())
       {
@@ -984,10 +1230,14 @@ public class LoggerFactory : ILoggerFactory
       {
          if (!_loggers.TryGetValue(categoryName, out Logger? logger))
          {
-            logger = new Logger(CreateLoggers(categoryName));
+            // Logger is a wrapper that contains muliple ILogger such as ConsoleLogger, DebugLogger etc, so only one instance of Logger is needed
+            logger = new Logger  
+            (
+               CreateLoggers(categoryName)  // <------------------5.3
+            );  
  
-            (logger.MessageLoggers, logger.ScopeLoggers) = ApplyFilters(logger.Loggers);
- 
+            (logger.MessageLoggers, logger.ScopeLoggers) = ApplyFilters(logger.Loggers);  // <--------------------5.7
+
             _loggers[categoryName] = logger;
          }
  
@@ -995,17 +1245,17 @@ public class LoggerFactory : ILoggerFactory
       }
    }
 
-   private LoggerInformation[] CreateLoggers(string categoryName)
+   private LoggerInformation[] CreateLoggers(string categoryName)  // <----------------5.4
    {
       var loggers = new LoggerInformation[_providerRegistrations.Count];
       for (int i = 0; i < _providerRegistrations.Count; i++)
       {
-         loggers[i] = new LoggerInformation(_providerRegistrations[i].Provider, categoryName);
+         loggers[i] = new LoggerInformation(_providerRegistrations[i].Provider, categoryName);  // <----------------5.5
       }
       return loggers;
    }
 
-   private (MessageLogger[] MessageLoggers, ScopeLogger[]? ScopeLoggers) ApplyFilters(LoggerInformation[] loggers)
+   private (MessageLogger[] MessageLoggers, ScopeLogger[]? ScopeLoggers) ApplyFilters(LoggerInformation[] loggers)  // <-----------------5.7
    {
       var messageLoggers = new List<MessageLogger>();
       List<ScopeLogger>? scopeLoggers = _filterOptions.CaptureScopes ? new List<ScopeLogger>() : null;
@@ -1059,7 +1309,7 @@ public class LoggerFactory : ILoggerFactory
       }
    }
 
-   private void AddProviderRegistration(ILoggerProvider provider, bool dispose)
+   private void AddProviderRegistration(ILoggerProvider provider, bool dispose)   // <--------------5.0.1
    {
       _providerRegistrations.Add(new ProviderRegistration
       {
@@ -1108,7 +1358,7 @@ public class LoggerFactory : ILoggerFactory
             }
             catch
             {
-               // Swallow exceptions on dispose
+               // swallow exceptions on dispose
             }
          }
       }
@@ -1150,14 +1400,149 @@ public class LoggerFactory : ILoggerFactory
 }
 //------------------------Ʌ
 
-//--------------------------V
-internal sealed class Logger : ILogger 
+//----------------------------------------V
+internal readonly struct LoggerInformation
 {
+   public LoggerInformation(ILoggerProvider provider, string category) : this()
+   {
+      ProviderType = provider.GetType();
+      Logger = provider.CreateLogger(category);  // <----------------------5.6, create an instance of `Logger`
+      Category = category;
+      ExternalScope = provider is ISupportExternalScope;
+   }
+ 
+   public ILogger Logger { get; }   // <--------------------
+ 
+   public string Category { get; }
+ 
+   public Type ProviderType { get; }
+ 
+   public bool ExternalScope { get; }
+}
+//----------------------------------------Ʌ
+
+//---------------------------------V
+internal sealed class ConsoleLogger : ILogger
+{
+   private readonly string _name;
+   private readonly ConsoleLoggerProcessor _queueProcessor;
+
+   internal ConsoleLogger(string name, ConsoleLoggerProcessor loggerProcessor, ConsoleFormatter formatter, IExternalScopeProvider? scopeProvider, ConsoleLoggerOptions options)
+   {
+      _name = name;
+      _queueProcessor = loggerProcessor;
+      Formatter = formatter;
+      ScopeProvider = scopeProvider;
+      Options = options;
+   }
+
+   internal ConsoleFormatter Formatter { get; set; }
+   internal IExternalScopeProvider? ScopeProvider { get; set; }
+   internal ConsoleLoggerOptions Options { get; set; }
+   private static StringWriter? t_stringWriter;
+
+   public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+   {
+      if (!IsEnabled(logLevel))
+         return;
+  
+      t_stringWriter ??= new StringWriter();
+      LogEntry<TState> logEntry = new LogEntry<TState>(logLevel, _name, eventId, state, exception, formatter);
+      Formatter.Write(in logEntry, ScopeProvider, t_stringWriter);
+ 
+      var sb = t_stringWriter.GetStringBuilder();
+      if (sb.Length == 0)
+         return;
+
+      string computedAnsiString = sb.ToString();
+      sb.Clear();
+      if (sb.Capacity > 1024)
+      {
+         sb.Capacity = 1024;
+      }
+      _queueProcessor.EnqueueMessage(new LogMessageEntry(computedAnsiString, logAsError: logLevel >= Options.LogToStandardErrorThreshold));
+   }
+
+   public bool IsEnabled(LogLevel logLevel)
+   {
+      return logLevel != LogLevel.None;
+   }
+
+   public IDisposable BeginScope<TState>(TState state) 
+   {
+      return ScopeProvider?.Push(state) ?? NullScope.Instance;
+   } 
+}
+//---------------------------------Ʌ
+
+//------------------------------V
+public class DebugLoggerProvider : ILoggerProvider
+{
+   public ILogger CreateLogger(string name)
+   {
+      return new DebugLogger(name);
+   }
+ 
+   public void Dispose() { }
+}
+//------------------------------Ʌ
+
+//---------------------------------------V
+internal sealed partial class DebugLogger : ILogger  // a logger that writes messages in the debug output window only when a debugger is attached
+{
+   private readonly string _name;
+
+   public DebugLogger(string name)
+   {
+      _name = name;
+   }
+
+   public IDisposable BeginScope<TState>(TState state)
+   {
+      return NullScope.Instance;
+   }
+
+   public bool IsEnabled(LogLevel logLevel)
+   {
+      return Debugger.IsAttached && logLevel != LogLevel.None;
+   }
+
+   public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+   {
+      if (!IsEnabled(logLevel))
+         return;
+      
+      string message = formatter(state, exception);
+ 
+      if (string.IsNullOrEmpty(message))
+         return;
+ 
+      message = $"{ logLevel }: {message}";
+ 
+      if (exception != null)
+      {
+         message += Environment.NewLine + Environment.NewLine + exception;
+      }
+ 
+      DebugWriteLine(message, _name);
+   }
+}
+//---------------------------------------Ʌ
+
+//--------------------------V
+internal sealed class Logger : ILogger
+{
+   public Logger(LoggerInformation[] loggers) 
+   {
+      Loggers = loggers;
+   } 
+
    public LoggerInformation[] Loggers { get; set; }
    public MessageLogger[] MessageLoggers { get; set; }
    public ScopeLogger[] ScopeLoggers { get; set; }
 
-   public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter) {
+   public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter) 
+   {
       MessageLogger[] loggers = MessageLoggers;
 
       List<Exception> exceptions = null;
@@ -1298,13 +1683,16 @@ internal sealed class Logger : ILogger
 }
 //--------------------------Ʌ
 
-//--------------------V
-public class Logger<T> : ILogger<T> 
+//---------------------------------V
+public class Logger<T> : ILogger<T>    // a wrapper of Logger
 {
-   private readonly ILogger _logger;
+   private readonly ILogger _logger;   // _logger is Logger
 
-   public Logger(ILoggerFactory factory) {   // ILoggerFactory is registered via services.AddLogging()
-      _logger = factory.CreateLogger(TypeNameHelper.GetTypeDisplayName(typeof(T), includeGenericParameters: false, nestedTypeDelimiter: '.'));
+   public Logger(ILoggerFactory factory)  // <-------------------------------5
+   {   
+      _logger = factory.CreateLogger(     // <-------------------------------5.1
+         TypeNameHelper.GetTypeDisplayName(typeof(T), includeGenericParameters: false, nestedTypeDelimiter: '.')
+      ); 
    }
 
    IDisposable ILogger.BeginScope<TState>(TState state) {
@@ -1319,7 +1707,37 @@ public class Logger<T> : ILogger<T>
       _logger.Log(logLevel, eventId, state, exception, formatter);
    }
 }
-//--------------------Ʌ
+//---------------------------------Ʌ
+
+//------------------------------------V
+internal readonly struct MessageLogger
+{
+   public MessageLogger(ILogger logger, string? category, string? providerTypeFullName, LogLevel? minLevel, Func<string?, string?, LogLevel, bool>? filter)
+   {
+      Logger = logger;
+      Category = category;
+      ProviderTypeFullName = providerTypeFullName;
+      MinLevel = minLevel;
+      Filter = filter;
+   }
+
+   public ILogger Logger { get; }   // <-----------contains concrete logger e.g `ConsoleLogger`
+   public string? Category { get; }
+   private string? ProviderTypeFullName { get; }
+   public LogLevel? MinLevel { get; }
+   public Func<string?, string?, LogLevel, bool>? Filter { get; }
+   public bool IsEnabled(LogLevel level)
+   {
+      if (MinLevel != null && level < MinLevel)
+         return false;
+ 
+      if (Filter != null)
+         return Filter(ProviderTypeFullName, Category, level);
+ 
+      return true;
+   }
+}
+//------------------------------------Ʌ
 
 //----------------------------------V
 internal readonly struct ScopeLogger
@@ -1347,25 +1765,4 @@ internal readonly struct ScopeLogger
    }
 }
 //----------------------------------Ʌ
-
-//----------------------------------------V
-internal readonly struct LoggerInformation
-{
-   public LoggerInformation(ILoggerProvider provider, string category) : this()
-   {
-      ProviderType = provider.GetType();
-      Logger = provider.CreateLogger(category);
-      Category = category;
-      ExternalScope = provider is ISupportExternalScope;
-   }
- 
-   public ILogger Logger { get; }
- 
-   public string Category { get; }
- 
-   public Type ProviderType { get; }
- 
-   public bool ExternalScope { get; }
-}
-//----------------------------------------Ʌ
 ```
