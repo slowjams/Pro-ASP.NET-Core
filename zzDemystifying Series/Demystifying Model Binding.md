@@ -1459,6 +1459,19 @@ public class FormValueProviderFactory : IValueProviderFactory
    }
 }
 
+//----------------------------->>
+public interface IValueProvider
+{
+   bool ContainsPrefix(string prefix);
+   ValueProviderResult GetValue(string key);
+}
+
+public interface IBindingSourceValueProvider : IValueProvider
+{
+   IValueProvider? Filter(BindingSource bindingSource);
+}
+//-----------------------------<<
+
 //----------------------------------------------------------------------------V
 public abstract class BindingSourceValueProvider : IBindingSourceValueProvider
 {

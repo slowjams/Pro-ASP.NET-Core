@@ -1,0 +1,32 @@
+2022-11-28 22:56:19.380 +11:00 [Information] Microsoft.Hosting.Lifetime: Now listening on: http://localhost:5000
+2022-11-28 22:56:19.409 +11:00 [Information] Microsoft.Hosting.Lifetime: Application started. Press Ctrl+C to shut down.
+2022-11-28 22:56:19.411 +11:00 [Information] Microsoft.Hosting.Lifetime: Hosting environment: Development
+2022-11-28 22:56:19.413 +11:00 [Information] Microsoft.Hosting.Lifetime: Content root path: C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\DemystifyingLogging
+2022-11-28 22:56:19.999 +11:00 [Information] DemystifyingLogging.Controllers.HomeController: Loaded Information Yes
+2022-11-28 22:56:20.019 +11:00 [Warning] DemystifyingLogging.Controllers.HomeController: Loaded Warning
+2022-11-28 22:56:20.022 +11:00 [Error] DemystifyingLogging.Controllers.HomeController: Loaded Error
+2022-11-28 22:56:20.025 +11:00 [Critical] DemystifyingLogging.Controllers.HomeController: Loaded Critical
+2022-11-28 22:59:01.674 +11:00 [Information] Microsoft.Hosting.Lifetime: Now listening on: http://localhost:5000
+2022-11-28 22:59:01.696 +11:00 [Information] Microsoft.Hosting.Lifetime: Application started. Press Ctrl+C to shut down.
+2022-11-28 22:59:01.698 +11:00 [Information] Microsoft.Hosting.Lifetime: Hosting environment: Development
+2022-11-28 22:59:01.700 +11:00 [Information] Microsoft.Hosting.Lifetime: Content root path: C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\DemystifyingLogging
+2022-11-28 22:59:02.333 +11:00 [Information] DemystifyingLogging.Controllers.HomeController: Loaded Information Yes
+2022-11-28 22:59:02.357 +11:00 [Warning] DemystifyingLogging.Controllers.HomeController: Loaded Warning
+2022-11-28 22:59:02.362 +11:00 [Error] DemystifyingLogging.Controllers.HomeController: Loaded Error
+2022-11-28 22:59:02.367 +11:00 [Critical] DemystifyingLogging.Controllers.HomeController: Loaded Critical
+2022-11-28 23:01:28.308 +11:00 [Information] Microsoft.Hosting.Lifetime: Now listening on: http://localhost:5000
+2022-11-28 23:01:28.340 +11:00 [Information] Microsoft.Hosting.Lifetime: Application started. Press Ctrl+C to shut down.
+2022-11-28 23:01:28.341 +11:00 [Information] Microsoft.Hosting.Lifetime: Hosting environment: Development
+2022-11-28 23:01:28.343 +11:00 [Information] Microsoft.Hosting.Lifetime: Content root path: C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\DemystifyingLogging
+2022-11-28 23:01:29.328 +11:00 [Information] DemystifyingLogging.Controllers.HomeController: Loaded Information Yes
+2022-11-28 23:01:29.346 +11:00 [Warning] DemystifyingLogging.Controllers.HomeController: Loaded Warning
+2022-11-28 23:01:29.348 +11:00 [Error] DemystifyingLogging.Controllers.HomeController: Loaded Error
+2022-11-28 23:01:29.350 +11:00 [Critical] DemystifyingLogging.Controllers.HomeController: Loaded Critical
+2022-11-28 23:05:35.971 +11:00 [Information] Microsoft.Hosting.Lifetime: Now listening on: http://localhost:5000
+2022-11-28 23:05:35.995 +11:00 [Information] Microsoft.Hosting.Lifetime: Application started. Press Ctrl+C to shut down.
+2022-11-28 23:05:35.997 +11:00 [Information] Microsoft.Hosting.Lifetime: Hosting environment: Development
+2022-11-28 23:05:36.000 +11:00 [Information] Microsoft.Hosting.Lifetime: Content root path: C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\DemystifyingLogging
+2022-11-28 23:05:36.716 +11:00 [Information] DemystifyingLogging.Controllers.HomeController: Loaded Information Yes
+2022-11-28 23:05:36.744 +11:00 [Warning] DemystifyingLogging.Controllers.HomeController: Loaded Warning
+2022-11-28 23:05:36.747 +11:00 [Error] DemystifyingLogging.Controllers.HomeController: Loaded Error
+2022-11-28 23:05:36.751 +11:00 [Critical] DemystifyingLogging.Controllers.HomeController: Loaded Critical

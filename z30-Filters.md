@@ -110,7 +110,7 @@ public class GuidResponseAttribute : Attribute, IAsyncAlwaysRunResultFilter, IFi
    public IFilterMetadata CreateInstance(IServiceProvider serviceProvider)
    {
       return ActivatorUtilities.GetServiceOrCreateInstance<GuidResponseAttribute>(serviceProvider);   // note it is GetServiceOrCreateInstance, not CreateInstance
-   }
+   }                                                                                                  // this is quite important, think again you will get the idea
 
    public async Task OnResultExecutionAsync(ResultExecutingContext context, ResultExecutionDelegate next)
    {
@@ -543,7 +543,7 @@ public class TypeFilterAttribute : Attribute, IFilterFactory, IOrderedFilter   /
    }
 }
 
-public class ServiceFilterAttribute : Attribute, IFilterFactory, IOrderedFilter   // <------need to register the type, see the example below
+public class ServiceFilterAttribute : Attribute, IFilterFactory, IOrderedFilter  
 {
    public ServiceFilterAttribute(Type type)
    {
@@ -552,13 +552,13 @@ public class ServiceFilterAttribute : Attribute, IFilterFactory, IOrderedFilter 
 
    public int Order { get; set; }
 
-   public Type ServiceType { get; }
+   public Type ServiceType { get; }   //------------------
 
    public bool IsReusable { get; set; }
 
    public IFilterMetadata CreateInstance(IServiceProvider serviceProvider)
    {
-      var filter = (IFilterMetadata)serviceProvider.GetRequiredService(ServiceType);
+      var filter = (IFilterMetadata)serviceProvider.GetRequiredService(ServiceType);   // <------need to register the ServiceType, see the example below
       
       if (filter is IFilterFactory filterFactory)
       {
@@ -606,15 +606,15 @@ public class PersonController : ControllerBase
     {
         _persons = new List<Person>
         {
-            new Person{ Id=1,Name="Tom" },
-            new Person{ Id=2,Name="Jerry" },
-            new Person{ Id=3,Name="Spike" }
+            new Person{ Id=1, Name="Tom" },
+            new Person{ Id=2, Name="Jerry" },
+            new Person{ Id=3, Name="Spike" }
         };
     }
 
     [HttpGet]
     [TypeFilter(typeof(MySampleActionFilter))]
-    public List<Person> GetPersons()    // <-----------------OK, TypeFilter doesn't require MySampleActionFilter to be registered
+    public List<Person> GetPersons()    // <-----------------ok, TypeFilter doesn't require MySampleActionFilter to be registered
     {
         return _persons;
     }

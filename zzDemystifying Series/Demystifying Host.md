@@ -50,9 +50,73 @@ public static class GenericHostBuilderExtensions
    }
 }
 
+//-------------------------V
 public static class WebHost
 {
    // ...
+
+   public static IWebHostBuilder CreateDefaultBuilder(string[] args)
+   {
+      var builder = new WebHostBuilder();
+ 
+      if (string.IsNullOrEmpty(builder.GetSetting(WebHostDefaults.ContentRootKey)))
+      {
+         builder.UseContentRoot(Directory.GetCurrentDirectory());
+      }
+
+      if (args != null)
+      {
+         builder.UseConfiguration(new ConfigurationBuilder().AddCommandLine(args).Build());
+      }
+
+      builder.ConfigureAppConfiguration((hostingContext, config) =>
+      {
+         var env = hostingContext.HostingEnvironment;
+
+         config.AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
+               .AddJsonFile($"appsettings.{env.EnvironmentName}.json", optional: true, reloadOnChange: true);
+
+         if (env.IsDevelopment())
+         {
+            if (!string.IsNullOrEmpty(env.ApplicationName))
+            {
+               var appAssembly = Assembly.Load(new AssemblyName(env.ApplicationName));
+               if (appAssembly != null)
+               {
+                  config.AddUserSecrets(appAssembly, optional: true);
+               }
+            }
+         }
+
+         config.AddEnvironmentVariables();
+ 
+         if (args != null)
+         {
+            config.AddCommandLine(args);
+         }
+      })
+      .ConfigureLogging((hostingContext, loggingBuilder) =>
+      {
+         loggingBuilder.Configure(options =>
+         {
+            options.ActivityTrackingOptions = ActivityTrackingOptions.SpanId| ActivityTrackingOptions.TraceId | ActivityTrackingOptions.ParentId;
+         });
+
+         loggingBuilder.AddConfiguration(hostingContext.Configuration.GetSection("Logging"));
+         loggingBuilder.AddConsole();
+         loggingBuilder.AddDebug();
+         loggingBuilder.AddEventSourceLogger();
+      }).
+      UseDefaultServiceProvider((context, options) =>
+      {
+         options.ValidateScopes = context.HostingEnvironment.IsDevelopment();
+      });
+ 
+      ConfigureWebDefaults(builder);
+ 
+      return builder;
+   }
+
    internal static void ConfigureWebDefaults(IWebHostBuilder builder) 
    {
       builder.ConfigureAppConfiguration((ctx, cb) =>
@@ -91,6 +155,7 @@ public static class WebHost
         .UseIISIntegration();
     }
 }
+//-------------------------Ʌ
 
 public interface IStartup
 {
@@ -720,48 +785,3 @@ public class HostBuilderContext {
    public IDictionary<object, object> Properties { get; }
 }
 ```
-
-
-<!-- <code>&lt;T&gt;<code> -->
-
-<!-- <div class="alert alert-info p-1" role="alert">
-    
-</div> -->
-
-<!-- <div class="alert alert-info pt-2 pb-0" role="alert">
-    <ul class="pl-1">
-      <li></li>
-      <li></li>
-    </ul>  
-</div> -->
-
-<!-- <ul>
-  <li></li>
-  <li></li>
-  <li></li>
-  <li></li>
-</ul>  -->
-
-<!-- <ul>
-  <li><b></b></li>
-  <li><b></b></li>
-  <li><b></b></li>
-  <li><b></b></li>
-</ul>  -->
-
-<!-- ![alt text](./zImages/16-1.png "Title") -->
-
-<!-- <span style="color:red">hurt</span> -->
-
-<style type="text/css">
-.markdown-body {
-  max-width: 1800px;
-  margin-left: auto;
-  margin-right: auto;
-}
-</style>
-
-<link rel="stylesheet" href="./zCSS/bootstrap.min.css">
-<script src="./zCSS/jquery-3.3.1.slim.min.js"></script>
-<script src="./zCSS/popper.min.js"></script>
-<script src="./zCSS/bootstrap.min.js"></script>

@@ -1,6 +1,7 @@
 using DemystifyingModelBinding.Models;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -22,7 +23,12 @@ namespace DemystifyingModelBinding
 
       public void ConfigureServices(IServiceCollection services)
       {
-         services.AddControllersWithViews();
+         services.AddControllersWithViews(mvcOption =>
+         {
+            mvcOption.ValueProviderFactories.RemoveType<RouteValueProviderFactory>();
+            mvcOption.ValueProviderFactories.Add(new ArraySupportingRouteValueProviderFactory());
+         });
+
          services.AddSingleton<IRepository, EmployeeRepository>();
       }
 

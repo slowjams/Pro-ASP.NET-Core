@@ -39,7 +39,7 @@ namespace DemystifyingLogging
 
          app.UseEndpoints(endpoints =>
          {
-            endpoints.MapControllers();
+            endpoints.MapControllerRoute("Default", "{controller=Home}/{action=Index}/{id?}");
          });
       }
    }

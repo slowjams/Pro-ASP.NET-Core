@@ -582,8 +582,9 @@ internal static class ControllerActionDescriptorBuilder      // <---------------
    // ...
 }
 //-----------------------------------------------------Ʌ
-/*
-public static class FilterScope
+
+//----------------------------->>
+public static class FilterScope   // FilterScope is used to decide execution order when there is a tie break in Order
 {
    public static readonly int First;
    public static readonly int Global = 10;
@@ -591,7 +592,8 @@ public static class FilterScope
    public static readonly int Action = 30;
    public static readonly int Last = 100;
 }
-*/
+//-----------------------------<<
+
 //-----------------------------------------------------Ʌ
 
 //-------------------------------------------V
@@ -765,9 +767,9 @@ internal class DefaultApplicationModelProvider : IApplicationModelProvider    //
 
    public void OnProvidersExecuting(ApplicationModelProviderContext context)
    {
-      foreach (var filter in _mvcOptions.Filters)
+      foreach (var filter in _mvcOptions.Filters)   // <---------------global filters registered via Startup.cs
       {
-         context.Result.Filters.Add(filter);
+         context.Result.Filters.Add(filter);       // add global filters to ApplicationModel 
       }
 
       foreach (var controllerType in context.ControllerTypes)
@@ -2208,8 +2210,8 @@ public interface IActionInvokerProvider
 internal sealed class ControllerActionInvokerProvider : IActionInvokerProvider      // <------------------------- f2
 {
    private readonly ControllerActionInvokerCache _controllerActionInvokerCache;
-   private readonly IReadOnlyList<IValueProviderFactory> _valueProviderFactories;
-   private readonly int _maxModelValidationErrors;
+   private readonly IReadOnlyList<IValueProviderFactory> _valueProviderFactories;  // IValueProviderFactory is from MvcOptions, check ArraySupportingRouteValueProvider example
+   private readonly int _maxModelValidationErrors;                                 // https://joonasw.net/view/arrays-in-aspnet-mvc-core-route-parameters
    private readonly ILogger _logger;
    private readonly DiagnosticListener _diagnosticListener;
    private readonly IActionResultTypeMapper _mapper;
@@ -2217,14 +2219,14 @@ internal sealed class ControllerActionInvokerProvider : IActionInvokerProvider  
 
    public ControllerActionInvokerProvider(
         ControllerActionInvokerCache controllerActionInvokerCache,
-        IOptions<MvcOptions> optionsAccessor,
+        IOptions<MvcOptions> optionsAccessor,          // <-------------------------check ArraySupportingRouteValueProvider for its usage
         ILoggerFactory loggerFactory,
         DiagnosticListener diagnosticListener,
         IActionResultTypeMapper mapper,
         IActionContextAccessor? actionContextAccessor)
    {
       _controllerActionInvokerCache = controllerActionInvokerCache;
-      _valueProviderFactories = optionsAccessor.Value.ValueProviderFactories.ToArray();
+      _valueProviderFactories = optionsAccessor.Value.ValueProviderFactories.ToArray();   // IValueProviderFactory is not injected, check ArraySupportingRouteValueProvider
       _maxModelValidationErrors = optionsAccessor.Value.MaxModelValidationErrors;
       _logger = loggerFactory.CreateLogger<ControllerActionInvoker>();
       _diagnosticListener = diagnosticListener;

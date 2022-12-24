@@ -1,0 +1,38 @@
+2022-11-29 00:07:32.168 +11:00 [Information] Microsoft.Hosting.Lifetime: Now listening on: http://localhost:5000
+2022-11-29 00:07:32.199 +11:00 [Information] Microsoft.Hosting.Lifetime: Application started. Press Ctrl+C to shut down.
+2022-11-29 00:07:32.201 +11:00 [Information] Microsoft.Hosting.Lifetime: Hosting environment: Development
+2022-11-29 00:07:32.204 +11:00 [Information] Microsoft.Hosting.Lifetime: Content root path: C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\DemystifyingLogging
+2022-11-29 00:07:33.171 +11:00 [Information] DemystifyingLogging.Controllers.HomeController: No, I don't have scope
+2022-11-29 00:07:33.175 +11:00 [Information] DemystifyingLogging.Controllers.HomeController: Yes, I have the scope!
+2022-11-29 00:07:33.179 +11:00 [Information] DemystifyingLogging.Controllers.HomeController: No, I lost it again
+2022-11-29 00:09:54.101 +11:00 [Information] Microsoft.Hosting.Lifetime: Now listening on: http://localhost:5000
+2022-11-29 00:09:54.127 +11:00 [Information] Microsoft.Hosting.Lifetime: Application started. Press Ctrl+C to shut down.
+2022-11-29 00:09:54.129 +11:00 [Information] Microsoft.Hosting.Lifetime: Hosting environment: Development
+2022-11-29 00:09:54.130 +11:00 [Information] Microsoft.Hosting.Lifetime: Content root path: C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\DemystifyingLogging
+2022-11-29 00:09:54.954 +11:00 [Warning] DemystifyingLogging.Controllers.HomeController: No, I don't have scope
+2022-11-29 00:09:54.958 +11:00 [Warning] DemystifyingLogging.Controllers.HomeController: Yes, I have the scope!
+2022-11-29 00:09:54.962 +11:00 [Warning] DemystifyingLogging.Controllers.HomeController: No, I lost it again
+2022-11-29 00:11:40.912 +11:00 [Information] Microsoft.Hosting.Lifetime: Now listening on: http://localhost:5000
+2022-11-29 00:11:40.942 +11:00 [Information] Microsoft.Hosting.Lifetime: Application started. Press Ctrl+C to shut down.
+2022-11-29 00:11:40.944 +11:00 [Information] Microsoft.Hosting.Lifetime: Hosting environment: Development
+2022-11-29 00:11:40.946 +11:00 [Information] Microsoft.Hosting.Lifetime: Content root path: C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\DemystifyingLogging
+2022-11-29 00:11:41.512 +11:00 [Warning] DemystifyingLogging.Controllers.HomeController: No, I don't have scope
+2022-11-29 00:11:41.516 +11:00 [Warning] DemystifyingLogging.Controllers.HomeController: Yes, I have the scope!
+2022-11-29 00:11:41.519 +11:00 [Warning] DemystifyingLogging.Controllers.HomeController: again, I have the scope!
+2022-11-29 00:11:41.521 +11:00 [Warning] DemystifyingLogging.Controllers.HomeController: No, I lost it again
+2022-11-29 19:43:17.597 +11:00 [Information] Microsoft.Hosting.Lifetime: Now listening on: http://localhost:5000
+2022-11-29 19:43:17.624 +11:00 [Information] Microsoft.Hosting.Lifetime: Application started. Press Ctrl+C to shut down.
+2022-11-29 19:43:17.626 +11:00 [Information] Microsoft.Hosting.Lifetime: Hosting environment: Development
+2022-11-29 19:43:17.627 +11:00 [Information] Microsoft.Hosting.Lifetime: Content root path: C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\DemystifyingLogging
+2022-11-29 19:43:18.628 +11:00 [Warning] DemystifyingLogging.Controllers.HomeController: No, I don't have scope
+2022-11-29 19:43:18.650 +11:00 [Warning] DemystifyingLogging.Controllers.HomeController: Yes, I have the scope!
+2022-11-29 19:43:18.661 +11:00 [Warning] DemystifyingLogging.Controllers.HomeController: again, I have the scope!
+2022-11-29 19:43:18.666 +11:00 [Warning] DemystifyingLogging.Controllers.HomeController: No, I lost it again
+2022-11-29 20:01:15.846 +11:00 [Information] Microsoft.Hosting.Lifetime: Now listening on: http://localhost:5000
+2022-11-29 20:01:15.880 +11:00 [Information] Microsoft.Hosting.Lifetime: Application started. Press Ctrl+C to shut down.
+2022-11-29 20:01:15.883 +11:00 [Information] Microsoft.Hosting.Lifetime: Hosting environment: Development
+2022-11-29 20:01:15.886 +11:00 [Information] Microsoft.Hosting.Lifetime: Content root path: C:\zIT Study\zTextbooks\Pro ASP.NET Core MVC 3\zCode\zPro ASP.NET Core MVC-Walkthrough\zProjects\DemystifyingLogging
+2022-11-29 20:01:16.590 +11:00 [Warning] DemystifyingLogging.Controllers.HomeController: No, I don't have scope
+2022-11-29 20:01:16.594 +11:00 [Warning] DemystifyingLogging.Controllers.HomeController: Yes, I have the scope!
+2022-11-29 20:01:16.598 +11:00 [Warning] DemystifyingLogging.Controllers.HomeController: again, I have the scope!
+2022-11-29 20:01:16.601 +11:00 [Warning] DemystifyingLogging.Controllers.HomeController: No, I lost it again

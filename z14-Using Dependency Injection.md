@@ -533,8 +533,9 @@ internal sealed class CallSiteValidator: CallSiteVisitor<CallSiteValidator.CallS
 
 ```C#
 // namespace Microsoft.Extensions.DependencyInjection
-public static class ActivatorUtilities  // Activator.CreateInstance + IServiceProvider
-{     
+public static class ActivatorUtilities  // Activator.CreateInstance + IServiceProvider, note that instanceType doesn't need to be registered 
+{                                       // and instanceType's parameters need to be registered in DI (unless you specify them directly)
+
    // public delegate object ObjectFactory(IServiceProvider serviceProvider, object?[]? arguments);
    public static ObjectFactory CreateFactory(Type instanceType, Type[] argumentTypes) // create a delegate that instantiate a type with constructor arguments provided directly
    {

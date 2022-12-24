@@ -48,10 +48,23 @@ namespace DemystifyingModelBinding.Controllers
          return View(places);
       }
 
-      [HttpGet("/users/{ids}")]
-      public IActionResult GetUsersByIds([FromRoute] string idsz)
+      public int Test()
       {
-         return null;
+         return 3;
       }
+
+      [HttpGet("/users/{ids}")]
+      public string GetUsersByIds([FromRoute] int[] ids)
+      {
+         //var sss = Request.Query["ids"];
+         return ids.ToString();
+      }
+
+      //[HttpGet("/usersz/{ids}")]
+      //public string GetUsersByIds(string ids)
+      //{
+      //   var sss = Request.Query["name"];
+      //   return ids.ToString();
+      //}
    }
 }

@@ -38,7 +38,29 @@ public class MyService {
    public MyService(ILogger<MyService> logger) {  // <------------------------4_
       // ...
    }
-   // ...
+   
+   public void Add()
+   {
+      _logger.LogTrace("Loaded Trace");
+      _logger.LogDebug("Loaded Debug");
+      _logger.LogInformation(1001, "Loaded Information {param}", "MyService");  // 1001 is the Event ID
+      // _logger.LogInformation("Loaded Information MyService");  // don't do this, which is not structure loggin
+      _logger.LogWarning("Loaded Warning");
+      _logger.LogError("Loaded Error");
+      _logger.LogCritical("Loaded Critical");
+      
+      //----------------------------------------------
+      _logger.LogWarning("No, I don't have scope");
+
+      using(_logger.BeginScope("Scope value"))
+      using(_logger.BeginScope(new Dictionary<string, object> { { "CustomValue1", 12345 } }))
+      {
+         _logger.LogWarning("Yes, I have the scope!");   
+         _logger.LogWarning("again, I have the scope!");
+      }
+
+      _logger.LogWarning("No, I lost it again");
+   }
 }
 
 // example
@@ -67,9 +89,24 @@ public class CookiePolicyMiddleware {
 Quick dependencies simplified code:
 
 ```C#
-//---------------------------------V
-public class Logger<T> : ILogger<T>  // so inject `Logger<T>` is just an indirect call version of injecting `ILoggerFactory`
+//--------------------------------------------------->>
+public interface ILogger<TCategoryName> : ILogger { }
+
+public interface ILogger
 {
+   void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter);
+   
+   bool IsEnabled(LogLevel logLevel);
+
+   IDisposable BeginScope<TState>(TState state) ;
+}
+//---------------------------------------------------<<
+
+//---------------------------------V
+public class Logger<T> : ILogger<T>  // so inject `Logger<T>` is just an indirect call of injecting `ILoggerFactory`
+{
+   private readonly ILogger _logger;
+
    public Logger(ILoggerFactory factory) 
    {   
       _logger = factory.CreateLogger(TypeNameHelper.GetTypeDisplayName(typeof(T), includeGenericParameters: false, nestedTypeDelimiter: '.')); 
@@ -105,9 +142,9 @@ public class LoggerFactory : ILoggerFactory   // contains `ILoggerProvider`
 
    public ILogger CreateLogger(string categoryName)
    {
-      if (!_loggers.TryGetValue(categoryName, out Logger? logger))
+      if (!_loggers.TryGetValue(categoryName, out Logger? logger))  //  only a single Logger instance is needed for a specific category
       {
-         logger = new Logger(CreateLoggers(categoryName));   // only a single Logger instance is needed
+         logger = new Logger(CreateLoggers(categoryName));   // <----------------------------------------------create a Logger instance
          (logger.MessageLoggers, logger.ScopeLoggers) = ApplyFilters(logger.Loggers);
          _loggers[categoryName] = logger;
       }
@@ -1167,6 +1204,30 @@ public interface ILoggerFactory : IDisposable
    void AddProvider(ILoggerProvider provider);
 }
 //-----------------------------Ʌ
+
+//-------------------------------V
+public class LoggerFactoryOptions
+{
+   public LoggerFactoryOptions() { }
+
+   public ActivityTrackingOptions ActivityTrackingOptions { get; set; }
+}
+//-------------------------------Ʌ
+
+//---------------------------------V
+[Flags]
+public enum ActivityTrackingOptions
+{
+   None        = 0x0000,
+   SpanId      = 0x0001,
+   TraceId     = 0x0002,
+   ParentId    = 0x0004,
+   TraceState  = 0x0008,
+   TraceFlags  = 0x0010,
+   Tags        = 0x0020,
+   Baggage     = 0x0040
+}
+//---------------------------------Ʌ
 
 //------------------------V
 public class LoggerFactory : ILoggerFactory   // <-------------------------5.0

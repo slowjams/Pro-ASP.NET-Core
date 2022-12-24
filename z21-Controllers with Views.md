@@ -261,6 +261,13 @@ public abstract class Controller : ControllerBase, IActionFilter, IFilterMetadat
 2. `ViewResult.ExecuteResultAsync(ActionContext context)` called (implements `IActionResult.ExecuteResultAsync(ActionContext context)`)
 
 ```C#
+//---------------------------->>
+public interface IActionResult
+{
+   Task ExecuteResultAsync(ActionContext context);
+}
+//----------------------------<<
+
 public class ViewResult : ActionResult, IStatusCodeActionResult
 {
    public int StatusCode { get; set; }
