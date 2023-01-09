@@ -18,6 +18,8 @@ public abstract class HttpContext {   // namespace Microsoft.AspNetCore.Http
    public abstract IDictionary<object, object> Items { get; set; }  // gets or sets a key/value collection that shares data within the scope of this request.
 
    public abstract IServiceProvider RequestServices { get; set; }   // gets or sets the IServiceProvider that can access to the request's service container.
+
+   public abstract string TraceIdentifier { get; set; }
 }
 //-------------------------------Ʌ
 
@@ -74,19 +76,25 @@ public sealed class DefaultHttpContext : HttpContext  // in a nutshell, HttpCont
 
    private IHttpAuthenticationFeature HttpAuthenticationFeature => _features.Fetch(ref _features.Cache.Authentication, _newHttpAuthenticationFeature)!;
 
-    private IHttpRequestLifetimeFeature LifetimeFeature => _features.Fetch(ref _features.Cache.Lifetime, _newHttpRequestLifetimeFeature)!;
+   private IHttpRequestLifetimeFeature LifetimeFeature => _features.Fetch(ref _features.Cache.Lifetime, _newHttpRequestLifetimeFeature)!;
 
-    private ISessionFeature SessionFeature => _features.Fetch(ref _features.Cache.Session, _newSessionFeature)!;
+   private ISessionFeature SessionFeature => _features.Fetch(ref _features.Cache.Session, _newSessionFeature)!;
 
-    private ISessionFeature? SessionFeatureOrNull => _features.Fetch(ref _features.Cache.Session, _nullSessionFeature);
+   private ISessionFeature? SessionFeatureOrNull => _features.Fetch(ref _features.Cache.Session, _nullSessionFeature);
 
-    private IHttpRequestIdentifierFeature RequestIdentifierFeature => _features.Fetch(ref _features.Cache.RequestIdentifier, _newHttpRequestIdentifierFeature)!;
+   private IHttpRequestIdentifierFeature RequestIdentifierFeature => _features.Fetch(ref _features.Cache.RequestIdentifier, _newHttpRequestIdentifierFeature)!;
 
-    public override IDictionary<object, object?> Items {
-       get { return ItemsFeature.Items; }
+   public override IDictionary<object, object?> Items {
+      get { return ItemsFeature.Items; }
       set { ItemsFeature.Items = value; }
-    }
+   }
    
+   public override string TraceIdentifier
+   {
+      get { return RequestIdentifierFeature.TraceIdentifier; }
+      set { RequestIdentifierFeature.TraceIdentifier = value; }
+   }
+    
    // ...
    public override ISession Session {
       get {

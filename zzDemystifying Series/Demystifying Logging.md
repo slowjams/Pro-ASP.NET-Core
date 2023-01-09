@@ -1,6 +1,81 @@
 Demystifying Logging
 ==============================
 
+```json
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning",
+      "CarvedRock": "Debug"
+    },
+    "Console": {
+      "FormatterName": "json",
+      "FormatterOptions": {
+        "SingleLine": true,
+        "IncludeScopes": true,
+        "TimestampFormat": "HH:mm:ss ",
+        "UseUtcTimestamp": true,
+        "JsonWriterOptions": {
+          "Indented": true
+        }
+      },
+      "AllowedHosts": "*"
+    }
+  }
+}
+
+```
+
+Instrumentation is code that is added to a software project to record what it is doing. This information can then be collected in files, databases, or in-memory and analyzed to understand how a software program is operating.
+
+
+```C#
+//!!!!!!!!!!!!!!!!!!!!trace id, span id, parent id, request id, correlation id---------------------------------------------------------------------to work on
+
+public class HomeController : Controller
+{
+   private readonly ILogger<HomeController> _logger;
+
+   public HomeController(ILogger<HomeController> logger)
+   {
+      _logger = logger;
+   }
+
+   public IActionResult Index()
+   {
+      return View();
+   }
+
+   public IActionResult Privacy()
+   {
+      return View();
+   }
+
+   [ResponseCache(Duration = 0, Location = ResponseCacheLocation.None, NoStore = true)]
+   public IActionResult Error()
+   {
+      return View(new ErrorViewModel { RequestId = Activity.Current?.Id ?? HttpContext.TraceIdentifier });  // <---------------------
+   }
+}
+
+/*
+Request ID: 00-c659e64609ac37959252c779655da6d3-5213a5e1fbfcea4a-00
+HTTP TraceId: 0HMNGJOQ3VBIF:00000009
+Activity.Id: 00-c659e64609ac37959252c779655da6d3-5213a5e1fbfcea4a-00
+Activity.SpanId: 5213a5e1fbfcea4a
+Activity.TraceId: c659e64609ac37959252c779655da6d3
+Activity.Parent:
+Activity.ParentId:
+Activity.ParentSpanId: 0000000000000000
+Activity.RootId: c659e64609ac37959252c779655da6d3
+Activity.Kind: Internal
+*/
+```
+
+
+
+
 Below are buildt-in logger provider:
 
 1. `ConsoleLoggerProvider` (`ConsoleLogger`) : writes messages to the console
@@ -8,7 +83,16 @@ Below are buildt-in logger provider:
 3. `EventLogLoggerProvider` (`EventLogLogger`) : Windows-only as it requires Windows-specific APIs
 4. `EventSourceLoggerProvider` (`EventSourceLogger`) : writes messages using Event Tracing for Windows (ETW) or LTTng tracing on Linux
 
-Note that .NET Core doesn't provder "FileLogger", which you have to use a third-party libary
+Note that .NET Core doesn't provder "FileLogger", which you have to use a third-party libary, in fact you can associate a file to the trace listener to write logs on files as
+
+```C#
+using System.Diagnostics;
+
+var path = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+var tracePath = Path.Join(path, $"Log_Boc_{DateTime.Now.ToString("yyyyMMdd-HHmm")}.txt");
+Trace.Listeners.Add(new TextWriterTraceListener(System.IO.File.CreateText(tracePath)));
+Trace.AutoFlush = true;
+```
 
 ```C#
 public class Program {
@@ -28,7 +112,7 @@ public class Program {
                  {   
                     options.IncludeScopes = true;
                  }
-               );
+               ).AddFilter("Boc.Domain", LogLevel.Debug);  // you can also configure the logging category/level via code
            });
 }
 
@@ -62,6 +146,23 @@ public class MyService {
       _logger.LogWarning("No, I lost it again");
    }
 }
+
+// example
+namespace Boc.Data;
+
+public class EmployeeRepository : IEmployeeRepository
+{
+   private readonly ILogger<EmployeeRepository> _logger;
+   private readonly ILogger _factoryLogger;
+
+
+   public EmployeeRepository(ILogger<EmployeeRepository> logger, ILoggerFactory loggerFactory)
+   {
+      _logger = logger;  // category name is Boc.Data.EmployeeRepository (namespace name + class name)
+      _factoryLogger = loggerFactory.CreateLogger("DataAccessLayer");  // specify a custom category name
+   }
+}
+
 
 // example
 public class CookiePolicyMiddleware {
@@ -1012,8 +1113,13 @@ public static class LoggerExtensions
    {
       logger.Log(LogLevel.Debug, eventId, exception, message, args);
    }
-
+     
    // ...
+
+   public static void Log(this ILogger logger, LogLevel logLevel, EventId eventId, Exception? exception, string? message, params object?[] args)
+   {
+      logger.Log(logLevel, eventId, new FormattedLogValues(message, args), exception, _messageFormatter);
+   }
 
    public static IDisposable? BeginScope(this ILogger logger, string messageFormat, params object?[] args)
    {
@@ -1116,7 +1222,7 @@ public interface ILogger
    void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter);
 
    bool IsEnabled(LogLevel logLevel);
-
+ 
    IDisposable BeginScope<TState>(TState state);
 }
 //----------------------Ʌ
